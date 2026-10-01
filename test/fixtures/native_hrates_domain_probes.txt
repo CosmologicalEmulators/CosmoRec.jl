@@ -1,0 +1,17 @@
+# CosmoRec.jl Chunk 2 native fixture: domain/failure behaviour of ORIGINAL get_rates() (one fresh process per probe, same harness/table as native_hrates_get_rates.txt)
+# NOTICE: Produced with CosmoRec (J. Chluba et al.); acknowledge and cite Chluba & Thomas 2010 (MNRAS 412, 748), Chluba & Sunyaev 2006 (A&A 446, 39). cosmorec_sha 086769055f61ae0c244a53dd381ee65b624d0ac3
+# exit code 0 with 'out of table range' stderr = native exit(0) domain failure (get_effective_rates.HI.cpp:263-267); 139 = SIGSEGV (out-of-bounds table read, stencil needs row index 500, cpp:284 allows lx+3==N);
+# exit 0 with data inside Te/Tg in [1.075,1.1): out-of-bounds read of the A row (column index 41), values are UNDEFINED memory contents, not a table result
+# Julia contract: out_of_table / stencil_exceeds_table => RateTableDomainError (native undefined/crash cases are errors, not reproduced)
+# harness_sha256: d7c055cd1d02dec5c6b954cbe8fd268bd7922adfd5e23a7e3141cd9cf7cea6ea
+label	Tg	Te	native_exit_code	native_stderr_class	native_data_A0_A1
+below_Tgmin	29.9	26.91	0	out_of_table_message_then_exit0	none
+above_Tgmax	9600	8640	0	out_of_table_message_then_exit0	none
+at_Tgmax_dn	9540.2245318623	8000	139	none	none
+at_Tgmax_up	9540.22453187	8000	0	out_of_table_message_then_exit0	none
+below_rhomin	1000	99.9	0	out_of_table_message_then_exit0	none
+above_rhomax	1000	1100.1	0	out_of_table_message_then_exit0	none
+UBband_Tg_9431	9431	8000	139	none	none
+UBband_Tg_9500	9500	8000	139	none	none
+UBband_rho_1.0751	1000	1075.1	0	none	0.0017123651771662632,0.0051068878195111829,
+UBband_rho_1.09	1000	1090	0	none	0.0025529192072015826,0.0075028870978636813,
