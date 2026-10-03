@@ -1,0 +1,2 @@
+# Chunk 5 acceptance summary (phase 5)
+5a-5e each passed their focused native/AD suites and a fresh full root `Pkg.test()` (49335, 49377, 49394, 49407, 49444; all exit 0; logs `chunk5/pkgtest5{a,b,c,d,e}.log`). Accepted: the native first pass (runmode 1) end to end, with gradients. Not accepted/claimed: diffusion iterations (runmode 0), CAMB production parity, event/grid derivatives. See `CHUNK5_RESULTS.md` and the per-stage files.

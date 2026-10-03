@@ -1,0 +1,40 @@
+# Chunks 7a-7c, 8a, 9a, 10a benchmark (public path): HI radiation-PDE setup, coefficients, step, march, correction integrals, feedback, diffusion stage and the full runmode-0 iteration (BenchmarkTools only). REQUIRES COSMOREC_NATIVE_DATA_DIR.
+using BenchmarkTools, CosmoRec, ForwardDiff
+include(joinpath(@__DIR__, "..", "test", "chunk7_helpers.jl"))
+const ROWS = NODES5[:, 1:9]
+const POPS = HIPopulationSplines(ROWS; zs = ZS6, ze = ZE6)
+const COEF = hi_pde_coefficients(ROWS, POPS, ACC5, HTAB6, LNBITOT6, NATIVE_HI_PDE_LEVELS; zs = ZS6, ze = ZE6)
+const MODEL = HIPDEModel(SETUP7, POPS, COEF, ACC5)
+println("7a: two-photon/Raman tables (load + splines)"); display(@benchmark load_hi_profile_data($TPD7) samples = 20 evals = 1)
+println("\n7a: PDE setup (grid + arm_PDE_solver ratios, 2353 points)"); display(@benchmark hi_pde_setup($PROF7) samples = 10 evals = 1)
+const ST = HIPDEState{Float64}(length(SETUP7.x))
+println("\n7b: def_PDE_Lyn_and_2s1s coefficients at z = 1300"); display(@benchmark hi_pde_rhs_coefficients!($ST, $MODEL, 1300.0) samples = 200 evals = 1)
+const S = HIPDEStepper{Float64}(SETUP7.x); const Y = zeros(length(SETUP7.x))
+println("\n7c: Lagrange O2 weights"); display(@benchmark lagrange_o2($(SETUP7.x)) samples = 50 evals = 1)
+println("\n7c: one Step_PDE_O2t (coefficients at the new z + banded solve)"); display(@benchmark hi_pde_step!($Y, $S, $MODEL, 0.55, 1300.0, 1290.0, 0.0, 0.0) samples = 200 evals = 1)
+println("\n7c: full march 2500 -> 500 (200 steps)"); display(@benchmark hi_pde_march($MODEL) samples = 5 evals = 1)
+const YN = hi_pde_march(MODEL)[1]; const STN = hi_pde_rhs_coefficients(MODEL, 500.0)
+println("\n8a: correction integrals at one output"); display(@benchmark hi_pde_integrals($MODEL, 500.0, $YN, $STN) samples = 100 evals = 1)
+println("\n8a: full PDE stage (march + 199 x 4 integrals)"); display(@benchmark hi_pde_corrections($MODEL) samples = 5 evals = 1)
+println("\n8a: ForwardDiff directional derivative of the full stage (1 partial, populations direction), first sample includes compilation")
+const X0 = vec(ROWS[:, 2:9]); const V = X0 .* 1e-3
+function stage(t)
+    rows = hcat(ROWS[:, 1], reshape(X0 .+ t .* V, size(ROWS, 1), 8)); pops = HIPopulationSplines(rows; zs = ZS6, ze = ZE6)
+    cs = hi_pde_coefficients(rows, pops, ACC5, HTAB6, LNBITOT6, NATIVE_HI_PDE_LEVELS; zs = ZS6, ze = ZE6)
+    out = hi_pde_corrections(HIPDEModel(SETUP7, pops, cs, ACC5); T = typeof(t))
+    return out.DF_2g[1][end] + out.DF_R[1][end]
+end
+display(@benchmark ForwardDiff.derivative(stage, 0.0) samples = 3 evals = 1)
+println()
+# ---- Chunks 9a, 10a: feedback construction, a feedback ODE pass, one diffusion stage, the full runmode-0 iteration (public path) ----
+@isdefined(solve_phase5) || include(joinpath(@__DIR__, "..", "test", "chunk5_helpers.jl"))
+const SOLVEB = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-16, aex = 1.0e-14)
+const D10 = HIDiffusionInputs(SETUP7, HTAB6, LNBITOT6)
+const OUT = hi_pde_corrections(MODEL)
+println("\n9a: hi_diffusion_feedback (4 splines of 199 outputs)"); display(@benchmark hi_diffusion_feedback($OUT) samples = 200 evals = 1)
+const FB = hi_diffusion_feedback(OUT); const RMF = with_diffusion(RM5, FB)
+println("\n9a: recombination_rhs with feedback (7-state, z = 1200)"); display(@benchmark recombination_rhs(1200.0, $(NODES5[2000, [9, 3, 4, 5, 6, 7, 8]]), $RMF; flag_He = false) samples = 2000 evals = 1)
+println("\n9a: one ODE pass with feedback (Rodas5P, tight tolerances)"); display(@benchmark recombination_pass($RMF, $SOLVEB) samples = 3 evals = 1)
+println("\n10a: one diffusion stage from stored rows (coefficients + march + integrals + feedback)"); display(@benchmark hi_diffusion_stage($RM5, $D10, $ROWS) samples = 3 evals = 1)
+println("\n10a: full runmode-0 iteration (3 passes, 2 stages, tail, assembly on the 10000-node CAMB grid)"); display(@benchmark recombination_history_diffusion($RM5, $(theta5()), $D10, $SOLVEB, $solve_tail5, $(GRID5[:, 1])) samples = 2 evals = 1)
+println()

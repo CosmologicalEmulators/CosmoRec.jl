@@ -197,10 +197,10 @@ end
 end
 
 """Result of [`get_rates`](@ref): `A[m]`, `B[m]`, `R[m, i]` (row = resolved state m, column i; `R[m, i] = 0` for `i <= m`, as native)."""
-struct RateResult{T<:Real}
-    A::Vector{T}
-    B::Vector{T}
-    R::Matrix{T}
+struct RateResult{TA<:Real,TB<:Real,TR<:Real}      # element types may differ under AD (A depends on Te, B and R only on Tg)
+    A::Vector{TA}
+    B::Vector{TB}
+    R::Matrix{TR}
 end
 
 """

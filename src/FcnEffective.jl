@@ -62,13 +62,15 @@ end
 
 Fill `g` (length 15, overwritten like native: zeroed, rho equation assigned, HI and HeI terms accumulated, absorber added last) with the
 derivative of the native state `X` at redshift `z`. `g` must be able to hold the promoted element type of `X`/`bg`.
+`diffusion` (an `HIDiffusionFeedback`, Chunk 9a) adds the HI PDE corrections of a diffusion iteration; `nothing` reproduces the first pass.
 Throws `RateTableDomainError` where native exits; `DPTableDomainError` where native runs the explicit DP integral unless `dp_fallback` (`dpesc_fallback`-style factory `triplet -> (Tg, eta, tauS, pd) -> correction`) is supplied.
 """
-function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing)
+function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing, flag_He::Bool = true, diffusion = nothing)
     (length(X) == EFF_NEQ && length(g) == EFF_NEQ) || throw(DimensionMismatch("fcn_effective! expects native neq = 15"))
     Tg, NH, Hz, fHe = bg.Tg, bg.NH, bg.Hz, bg.fHe
     rho = X[EFF_NEQ]
     xe, xp, _ = effective_fractions(X, fHe)
+    flag_He || (xe = xp)           # native compute_fractions with flag_He = 0: XHeII = 0, Xe = Xp (Chunk 5a)
     T = eltype(g)
     for i in 1:EFF_NEQ
         g[i] = zero(T)
@@ -78,13 +80,16 @@ function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_
     for i in 1:EFF_NHI
         g[EFF_IHI + i - 1] += dXH[i]
     end
+    hi_diffusion_rhs!(g, diffusion, z, X)   # native: end of fcn_HI_effective when Diffusion_correction_is_on (Chunk 9a); `nothing` = first pass
     dXHe = zeros(T, EFF_NHE)
     XHe = view(X, EFF_IHE:(EFF_IHE + EFF_NHE - 1))
-    helium_base_rhs!(dXHe, m.hetable, Tg, xe, NH, Hz, XHe, fHe, m.heatom, m.heconst, m.hconst; spin_forbidden = m.spin_forbidden)
-    for i in 1:EFF_NHE
-        g[EFF_IHE + i - 1] += dXHe[i]
+    if flag_He        # native: `if(flag_He==1) fcn_HeI_effective(...)` (includes the HI absorber of the HeI lines)
+        helium_base_rhs!(dXHe, m.hetable, Tg, xe, NH, Hz, XHe, fHe, m.heatom, m.heconst, m.hconst; spin_forbidden = m.spin_forbidden)
+        for i in 1:EFF_NHE
+            g[EFF_IHE + i - 1] += dXHe[i]
+        end
     end
-    if m.hi_absorption
+    if flag_He && m.hi_absorption
         hi_absorption_rhs!(g, 1, EFF_IHI, EFF_IHE, m.dp, m.bitot, m.fc, z, Tg, NH, Hz, X[EFF_IHI], XHe;
                            spin_forbidden = m.spin_forbidden, fcorr_on = true, diffusion_correction = false, c = m.hiabs, fallback = dp_fallback)
     end
@@ -92,8 +97,8 @@ function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_
 end
 
 """Allocating form of [`fcn_effective!`](@ref); element type is the promotion of `X` and the background."""
-function fcn_effective(z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing)
+function fcn_effective(z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing, flag_He::Bool = true, diffusion = nothing)
     T = promote_type(eltype(X), typeof(bg.Tg), typeof(bg.NH), typeof(bg.Hz), typeof(bg.fHe))
     g = Vector{T}(undef, EFF_NEQ)
-    return fcn_effective!(g, z, X, bg, m; dp_fallback = dp_fallback)
+    return fcn_effective!(g, z, X, bg, m; dp_fallback = dp_fallback, flag_He = flag_He, diffusion = diffusion)
 end

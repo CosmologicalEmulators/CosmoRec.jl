@@ -1,0 +1,8 @@
+# CosmoRec.jl native fixture (Chunk 5): ORIGINAL CosmoRec v3.0b (SHA 086769055f61ae0c244a53dd381ee65b624d0ac3), (c) J. Chluba et al.; ONE native pass via cosmorec_calc_h_cpp_ with runmode = 1 (Diffusion_flag = 0) on the production CAMB-adapter route (thermo-fixture cosmology, loaded H(z) table, nz = 3000, zstart = 3000, zend = 50 + Recfast tail).
+# Verbatim copy of chunk5/native_capture/out/run1/summary.txt (sha256 e81526f8c4da906fab85a75b74adf48573446ff1d60727a8fb065eb7a9765feb) written by harness5b.cpp (sha256 dca906d7a9520e31ef4685a031c5770b53493b68124729b35269cecbaacd5ca8); two fresh-process runs byte-identical (0.18 s per pass). The following line is the native header.
+HE_OFF	z	1680.9103034346122
+NODES	3000
+OUTROWS	3199
+FINAL_X	0.00023877545151196333	0.99976122454848804	3.1198637678431589e-22	1.8320961325866071e-22	6.3906414632133318e-29	5.9872151371632158e-29	1.7523863567061943e-28	0.082009323117224586	1e-300	1e-300	1e-300	1e-300	1e-300	1e-300	0.36470915629081457
+FLAG_HE_after_run	1
+RECFAST_INPUT	ze	50.000000000188152	Xe_Hi	0.00023877545151196333	Xei	0.00023877545151196333	rhoi	0.36470915629081457	dXe_dz	7.7898724179432565e-07	gHI	1.782575232148434e-20
