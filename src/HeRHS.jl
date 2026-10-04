@@ -128,6 +128,13 @@ function get_helium_rates(t::HeliumRateTable, Tg, c::HeliumConstants = NATIVE_HE
     n = nres(t)
     T = typeof(a[1] * logTg + Tg)
     A = zeros(T, n); B = zeros(T, n); R = zeros(T, n, n)
+    _fill_herates!(A, B, R, t, Tg, c, j, a)
+    return (A = A, B = B, R = R)
+end
+# private: the rate loop into A, B, R of element type T (R[m, i <= m] untouched; shared by get_helium_rates and the private workspace RHS)
+function _fill_herates!(A, B, R, t::HeliumRateTable, Tg, c::HeliumConstants, j, a)
+    T = eltype(A)
+    n = nres(t)
     for m in 1:n
         A[m] = helium_A(t.gw[m], t.nu_ion[m], t.mu_red, Tg, c)
         fx = zero(T)
@@ -143,7 +150,7 @@ function get_helium_rates(t::HeliumRateTable, Tg, c::HeliumConstants = NATIVE_HE
             R[m, i] = exp(fx)
         end
     end
-    return (A = A, B = B, R = R)
+    return nothing
 end
 
 """Effective continuum, `dX[idx_m] += B[m] (A[m] Xe Nc - X[idx_m])`, `Nc = NH XHeII` (native evaluate_effective_Rci_Ric_terms)."""

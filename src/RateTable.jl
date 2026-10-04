@@ -223,6 +223,12 @@ function get_rates!(A::AbstractVector, B::AbstractVector, R::AbstractMatrix, t::
     lx, ly, a, b, db = _setup(t, Tg, Te)
     n, neq = n_resolved(t), n_eq(t)
     (length(A) == n && length(B) == n && size(R) == (n, neq)) || throw(DimensionMismatch("A, B must have length n_resolved and R size (n_resolved, neqres)"))
+    _fill_hrates!(A, B, R, t, lx, ly, a, b, Tg, db)
+    return nothing
+end
+# private: the rate loop at a prepared stencil (shared by get_rates! and the private workspace RHS)
+function _fill_hrates!(A, B, R, t::AtomicRateTable, lx, ly, a, b, Tg, db::Bool)
+    n, neq = n_resolved(t), n_eq(t)
     for m in 1:n
         A[m] = _A(t, m, lx, ly, a, b, Tg, db)
         B[m] = _B(t, m, lx, a)

@@ -318,7 +318,7 @@ Native `DP_interpol_S` (`triplet = false`) / `DP_interpol_T`: returns `Pesc - p_
 `fallback(Tg, |eta|, |tauS|, pd)` (native `call_DP_Singlet/Triplet`, see [`dpesc_fallback`](@ref)) replaces the `DPTableDomainError`s: T outside the table returns it directly
 (with the unscaled `Tg`, no fcorr), eta/tau outside a sheet inserts it as that sheet's DP, exactly like the native nested interpolation.
 """
-function dp_correction(t::DPTable, triplet::Bool, T, tauS, eta; pd, fc, fallback = nothing, Tg = T)
+function dp_correction(t::DPTable, triplet::Bool, T, tauS, eta; pd, fc, fallback::F = nothing, Tg = T) where {F}
     if fallback !== nothing && !dp_T_in_table(t, log(T))
         return fallback(Tg, abs(eta), abs(tauS), pd)
     end
@@ -344,7 +344,7 @@ end
 
 """Ly-alpha-like singlet channel (`evaluate_HI_abs_HeI` with `DP_interpol_S`): `dXe = DP A21/(efac - 1) (X2P efac - 3 X1s)`. `fcorr_on` is `_HI_abs_appr_flag == 1`."""
 function hi_abs_singlet(dp::DPTable, bitot::BitotSeries, fc::FcorrSpline, Tg, X1s, X2P, NH, Hz, XH1s;
-                        fcorr_on::Bool = true, f_t = 1.0, f_b = 1.0, fallback = nothing, line::HIAbsLine = NATIVE_HIABS_SINGLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS)
+                        fcorr_on::Bool = true, f_t = 1.0, f_b = 1.0, fallback::F = nothing, line::HIAbsLine = NATIVE_HIABS_SINGLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS) where {F}
     eta = hi_abs_eta(NH, XH1s, Hz, c)
     T = Tg * f_t
     pd = pd_singlet(bitot, Tg; f_t = f_t, f_b = f_b)
@@ -354,7 +354,7 @@ end
 
 """Intercombination channel (`evaluate_HI_abs_HeI_Intercombination` with `DP_interpol_T`; pd = 1, no fcorr)."""
 function hi_abs_triplet(dp::DPTable, Tg, X1s, X2T, NH, Hz, XH1s;
-                        f_t = 1.0, fallback = nothing, line::HIAbsLine = NATIVE_HIABS_TRIPLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS)
+                        f_t = 1.0, fallback::F = nothing, line::HIAbsLine = NATIVE_HIABS_TRIPLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS) where {F}
     eta = hi_abs_eta(NH, XH1s, Hz, c)
     T = Tg * f_t
     return line_channel(line, Tg, X2T, X1s, NH, Hz, eta, (tauS, e) -> dp_correction(dp, true, T, tauS, e; pd = 1.0, fc = 1.0, fallback = fallback === nothing ? nothing : fallback(true), Tg = Tg), c)
@@ -369,8 +369,8 @@ Active only for `z <= zcrit_HI f_t` and not while the HeI diffusion correction i
 Returns `(dXe_S, dXe_T)` (0 for inactive channels). Signs: HeI 1s `+d`, 2^1P `-d` (S) or 2^3P1 `-d` (T), electron `+d`, H 1s `-d`.
 """
 function hi_absorption_rhs!(g, iXe::Int, iHI1s::Int, iHeI::Int, dp::DPTable, bitot::BitotSeries, fc::FcorrSpline, z, Tg, NH, Hz, XH1s, X;
-                            spin_forbidden::Bool = true, fcorr_on::Bool = true, diffusion_correction::Bool = false, f_t = 1.0, f_b = 1.0, fallback = nothing,
-                            S::HIAbsLine = NATIVE_HIABS_SINGLET, T::HIAbsLine = NATIVE_HIABS_TRIPLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS)
+                            spin_forbidden::Bool = true, fcorr_on::Bool = true, diffusion_correction::Bool = false, f_t = 1.0, f_b = 1.0, fallback::F = nothing,
+                            S::HIAbsLine = NATIVE_HIABS_SINGLET, T::HIAbsLine = NATIVE_HIABS_TRIPLET, c::HIAbsConstants = NATIVE_HIABS_CONSTANTS) where {F}
     zero_ = zero(Tg * NH * Hz * XH1s * X[1])
     if !(_primal(z) <= c.zcrit_HI * f_t) || diffusion_correction
         return (zero_, zero_)

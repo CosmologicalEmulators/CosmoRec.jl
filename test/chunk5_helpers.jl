@@ -47,13 +47,101 @@ end
 function tgrad5!(dT, u, p, z)
     dT .= ForwardDiff.derivative(zz -> (du = zeros(promote_type(eltype(u), typeof(zz)), length(u)); recombination_ode!(du, u, p, zz); du), z); return nothing
 end
-const ODEFUN5 = ODEFunction(recombination_ode!; jac = jac5!, tgrad = tgrad5!)
+# explicit FullSpecialize (caller callback only; the library has no solver default): avoids SciMLBase's AutoSpecialize FunctionWrappersWrapper around the RHS
+const ODEFUN5 = ODEFunction{true, SciMLBase.FullSpecialize}(recombination_ode!; jac = jac5!, tgrad = tgrad5!)
 
 """abstol per component for the packed 12-/7-state: rho, X1s: `a1`; H excited: `aex`; He 1s: `a1`; He excited: `aex`."""
 abstol5(n; a1 = 1.0e-12, aex = 1.0e-30) = n == 12 ? [a1, a1, fill(aex, 5)..., a1, fill(aex, 4)...] : [a1, a1, fill(aex, 5)...]
 
+# Per-solve prepared state Jacobian (caller callback only). Built from the ACTUAL u0/p/z0 of one solve (Float64, Dual, nested Dual, BigFloat element types as
+# supplied); every call writes the LIVE p and z of that call into the callable before differentiating (nothing frozen). Calls whose types differ from the
+# prepared ones (e.g. a Dual z into a Float64-z cache) use the unprepared oracle jac5! (counted in `nfallback`), never a conversion. One instance per
+# solve: no global workspace, no sharing across solves/chains. Same chunk size ForwardDiff picks by default (n <= 12).
+mutable struct RHSAt5{P,Z}
+    p::P
+    z::Z
+end
+(r::RHSAt5)(du, u) = (recombination_ode!(du, u, r.p, r.z); nothing)
+struct PreparedJac5{R<:RHSAt5,C,Y}
+    f::R
+    cfg::C
+    y::Y
+    nfallback::Base.RefValue{Int}
+end
+function PreparedJac5(u0, p, z0)
+    f = RHSAt5(p, z0); y = similar(u0)
+    return PreparedJac5(f, ForwardDiff.JacobianConfig(f, y, u0, ForwardDiff.Chunk{length(u0)}()), y, Ref(0))
+end
+function (j::PreparedJac5{RHSAt5{P,Z}})(Jm, u, p, z) where {P,Z}
+    if p isa P && z isa Z && typeof(u) === typeof(j.y)
+        j.f.p = p; j.f.z = z
+        ForwardDiff.jacobian!(Jm, j.f, j.y, u, j.cfg)
+    else
+        j.nfallback[] += 1
+        jac5!(Jm, u, p, z)
+    end
+    return nothing
+end
+# Per-solve PRIMAL RHS workspace (Step 3 increment 1; private CosmoRec._rhs_workspace / _recombination_rhs_ws!, same result as recombination_ode!).
+# Built from the solve's actual u0/p/z0 types; a call with other argument types runs the public allocating path (counted in `nfallback`). The state
+# Jacobian (PreparedJac5) and the time gradient keep using the allocating recombination_ode!.
+struct RHSWS5{W}
+    ws::W
+    nfallback::Base.RefValue{Int}
+end
+RHSWS5(u0, p, z0) = RHSWS5(CosmoRec._rhs_workspace(u0, z0, p.rm; hscale = p.hscale, nbscale = p.nbscale), Ref(0))
+function (r::RHSWS5)(du, u, p, z)
+    CosmoRec._recombination_rhs_ws!(du, z, u, p.rm, r.ws; flag_He = p.flag, hscale = p.hscale, nbscale = p.nbscale) || (r.nfallback[] += 1)
+    return nothing
+end
+# Per-solve BUFFERED state Jacobian (Step 3 increment 2, docs/ODE_CORE_WORKSPACE_DESIGN.md §8–§9): the differentiated functor writes through a private
+# Dual-typed RHS workspace (CosmoRec._rhs_workspace / _recombination_rhs_ws!) with the LIVE p and z of each call. Its tag is the FAMILY tag
+# Tag{BufRHS5,V}: it passes ForwardDiff's DEFAULT tag check (f isa BufRHS5) and avoids the recursive type a concrete Tag{BufRHS5{W},V} would need, since
+# W holds Duals of that tag. Ordering: ForwardDiff's internal `tagcount` is triggered once at construction, exactly as `ForwardDiff.Tag(f, V)` does
+# for concrete callables (an explicit dependency on unexported ForwardDiff internals, isolated in `bufrhs5_tag`). Built per solve from the actual
+# u0/p/z0 types; a call with other types uses the unprepared oracle jac5! (counted), never a conversion. PreparedJac5 and jac5! remain the oracles.
+mutable struct BufRHS5{W,P,Z}
+    ws::W
+    p::P
+    z::Z
+    nfallback::Base.RefValue{Int}
+end
+function (b::BufRHS5)(du, u)
+    CosmoRec._recombination_rhs_ws!(du, b.z, u, b.p.rm, b.ws; flag_He = b.p.flag, hscale = b.p.hscale, nbscale = b.p.nbscale) || (b.nfallback[] += 1)
+    return nothing
+end
+function bufrhs5_tag(::Type{V}) where {V}
+    TT = ForwardDiff.Tag{BufRHS5,V}
+    ForwardDiff.tagcount(TT)                         # internal ForwardDiff API: what Tag(f, V) does for a concrete f
+    return TT()
+end
+struct WSJac5{B<:BufRHS5,C,Y}
+    f::B
+    cfg::C
+    y::Y
+    nfallback::Base.RefValue{Int}
+end
+function prepare_wsjac5(u0, p, z0)                   # factory (distinct name: no clash with the default constructor)
+    V = eltype(u0); n = length(u0); tag = bufrhs5_tag(V)
+    ws = CosmoRec._rhs_workspace(ForwardDiff.Dual{typeof(tag),V,n}.(u0), z0, p.rm; hscale = p.hscale, nbscale = p.nbscale)
+    f = BufRHS5(ws, p, z0, Ref(0)); y = similar(u0)
+    return WSJac5(f, ForwardDiff.JacobianConfig(f, y, u0, ForwardDiff.Chunk{n}(), tag), y, Ref(0))
+end
+function (j::WSJac5{BufRHS5{W,P,Z}})(Jm, u, p, z) where {W,P,Z}
+    if p isa P && z isa Z && typeof(u) === typeof(j.y)
+        j.f.p = p; j.f.z = z
+        ForwardDiff.jacobian!(Jm, j.f, j.y, u, j.cfg)      # default tag check
+    else
+        j.nfallback[] += 1
+        jac5!(Jm, u, p, z)
+    end
+    return nothing
+end
+wsjac5_fallbacks(j::WSJac5) = j.nfallback[] + j.f.nfallback[]
+odefun5(u0, p, z0) = ODEFunction{true, SciMLBase.FullSpecialize}(RHSWS5(u0, p, z0); jac = prepare_wsjac5(u0, p, z0), tgrad = tgrad5!)
+prob_phase5(u0, z0, znodes, p) = ODEProblem{true, SciMLBase.FullSpecialize}(odefun5(u0, p, z0), u0, (z0, znodes[end]), p)
 function solve_phase5(f!, u0, z0, znodes, p; alg = Rodas5P(), reltol = 1.0e-9, a1 = 1.0e-12, aex = 1.0e-30, sensealg = nothing)
-    prob = ODEProblem(ODEFUN5, u0, (z0, znodes[end]), p)
+    prob = prob_phase5(u0, z0, znodes, p)
     kw = (; reltol = reltol, abstol = abstol5(length(u0); a1 = a1, aex = aex), saveat = znodes, internalnorm = primal_norm)
     sol = sensealg === nothing ? solve(prob, alg; kw...) : solve(prob, alg; kw..., sensealg = sensealg)
     SciMLBase.successful_retcode(sol) || error("ODE solve failed: retcode = $(sol.retcode) after $(length(sol.u)) saved nodes (z0 = $z0)")

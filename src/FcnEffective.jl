@@ -65,8 +65,15 @@ derivative of the native state `X` at redshift `z`. `g` must be able to hold the
 `diffusion` (an `HIDiffusionFeedback`, Chunk 9a) adds the HI PDE corrections of a diffusion iteration; `nothing` reproduces the first pass.
 Throws `RateTableDomainError` where native exits; `DPTableDomainError` where native runs the explicit DP integral unless `dp_fallback` (`dpesc_fallback`-style factory `triplet -> (Tg, eta, tauS, pd) -> correction`) is supplied.
 """
-function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing, flag_He::Bool = true, diffusion = nothing)
+function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback::F = nothing, flag_He::Bool = true, diffusion = nothing) where {F}
     (length(X) == EFF_NEQ && length(g) == EFF_NEQ) || throw(DimensionMismatch("fcn_effective! expects native neq = 15"))
+    T = eltype(g)
+    return _fcn_effective_core!(g, z, X, bg, m, zeros(T, EFF_NHI), zeros(T, EFF_NHE), nothing, dp_fallback, flag_He, diffusion)
+end
+
+# Private core shared by the public allocating `fcn_effective!` (rates = nothing: the allocating `get_rates`/`get_helium_rates` paths, fresh dXH/dXHe)
+# and the private workspace RHS (`RHSWorkspace.jl`: rates = an `_RHSWorkspace`, dXH/dXHe from it, zeroed here). Same statements and order as before.
+function _fcn_effective_core!(g, z, X, bg::EffectiveBackground, m::EffectiveModel, dXH, dXHe, rates, dp_fallback::F, flag_He::Bool, diffusion) where {F}
     Tg, NH, Hz, fHe = bg.Tg, bg.NH, bg.Hz, bg.fHe
     rho = X[EFF_NEQ]
     xe, xp, _ = effective_fractions(X, fHe)
@@ -75,16 +82,16 @@ function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_
     for i in 1:EFF_NEQ
         g[i] = zero(T)
     end
-    dXH = zeros(T, EFF_NHI)
-    g[EFF_NEQ] = hydrogen_rhs!(dXH, m.htable, Tg, rho, xe, xp, fHe, NH, Hz, view(X, EFF_IHI:(EFF_IHI + EFF_NHI - 1)), m.hatom, m.hconst)
+    rates === nothing || fill!(dXH, zero(T))
+    g[EFF_NEQ] = _hydrogen_rhs_rates!(dXH, rates, m.htable, Tg, rho, xe, xp, fHe, NH, Hz, view(X, EFF_IHI:(EFF_IHI + EFF_NHI - 1)), m.hatom, m.hconst)
     for i in 1:EFF_NHI
         g[EFF_IHI + i - 1] += dXH[i]
     end
     hi_diffusion_rhs!(g, diffusion, z, X)   # native: end of fcn_HI_effective when Diffusion_correction_is_on (Chunk 9a); `nothing` = first pass
-    dXHe = zeros(T, EFF_NHE)
     XHe = view(X, EFF_IHE:(EFF_IHE + EFF_NHE - 1))
     if flag_He        # native: `if(flag_He==1) fcn_HeI_effective(...)` (includes the HI absorber of the HeI lines)
-        helium_base_rhs!(dXHe, m.hetable, Tg, xe, NH, Hz, XHe, fHe, m.heatom, m.heconst, m.hconst; spin_forbidden = m.spin_forbidden)
+        rates === nothing || fill!(dXHe, zero(T))
+        _helium_base_rhs_rates!(dXHe, rates, m.hetable, Tg, xe, NH, Hz, XHe, fHe, m.heatom, m.heconst, m.hconst, m.spin_forbidden)
         for i in 1:EFF_NHE
             g[EFF_IHE + i - 1] += dXHe[i]
         end
@@ -95,9 +102,13 @@ function fcn_effective!(g, z, X, bg::EffectiveBackground, m::EffectiveModel; dp_
     end
     return g
 end
+# rates === nothing: exactly the previous public calls (allocating rate evaluation)
+_hydrogen_rhs_rates!(dX, ::Nothing, table, Tg, rho, Xe, Xp, fHe, NH, Hz, X, atom, c) = hydrogen_rhs!(dX, table, Tg, rho, Xe, Xp, fHe, NH, Hz, X, atom, c)
+_helium_base_rhs_rates!(dX, ::Nothing, table, Tg, Xe, NH, Hz, X, fHe, atom, c, rc, spin_forbidden::Bool) =
+    helium_base_rhs!(dX, table, Tg, Xe, NH, Hz, X, fHe, atom, c, rc; spin_forbidden = spin_forbidden)
 
 """Allocating form of [`fcn_effective!`](@ref); element type is the promotion of `X` and the background."""
-function fcn_effective(z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback = nothing, flag_He::Bool = true, diffusion = nothing)
+function fcn_effective(z, X, bg::EffectiveBackground, m::EffectiveModel; dp_fallback::F = nothing, flag_He::Bool = true, diffusion = nothing) where {F}
     T = promote_type(eltype(X), typeof(bg.Tg), typeof(bg.NH), typeof(bg.Hz), typeof(bg.fHe))
     g = Vector{T}(undef, EFF_NEQ)
     return fcn_effective!(g, z, X, bg, m; dp_fallback = dp_fallback, flag_He = flag_He, diffusion = diffusion)

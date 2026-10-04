@@ -46,6 +46,7 @@ include("HIPDESolver.jl")
 include("HIPDEIntegrals.jl")
 include("HIDiffusionFeedback.jl")
 include("RecombinationDiffusion.jl")
+include("RHSWorkspace.jl")
 
 export AtomicRateTable, ResolvedStates, RateConstants, NATIVE_CONSTANTS, RateResult, RateTableDomainError,
     get_rates, get_rates!, log_qnl_qe, stencil_start, read_native_rate_file, load_rate_table,

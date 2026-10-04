@@ -31,6 +31,26 @@ const PASS5B = recombination_pass(RM5, SOLVE5B)
         end
     end
 
+    @testset "reference callback: FullSpecialize (no FunctionWrappersWrapper), per-solve primal RHS workspace and buffered Jacobian" begin
+        # caller-side solver configuration only (the library has no solver default); AutoSpecialize would wrap recombination_ode! at runtime
+        @test ODEFUN5 isa ODEFunction{true, SciMLBase.FullSpecialize}
+        u0 = PASS5B.states[1]; zn = [PASS5B.z[1], PASS5B.z[2]]
+        prob = prob_phase5(u0, zn[1], zn, RecombinationODEParams(RM5, true))     # the problem solve_phase5 actually builds
+        @test prob isa ODEProblem && prob.f isa ODEFunction{true, SciMLBase.FullSpecialize}
+        integ = SciMLBase.init(prob, Rodas5P(); reltol = 1.0e-12, abstol = abstol5(12; a1 = 1.0e-18, aex = 1.0e-14), saveat = zn, internalnorm = primal_norm)
+        @test integ.f.f isa RHSWS5                                               # the per-solve primal workspace functor itself (no FunctionWrappersWrapper)
+        @test integ.f isa ODEFunction{true, SciMLBase.FullSpecialize}
+        # per-solve buffered state Jacobian + primal workspace: a real 12-state block solves bitwise like the allocating recombination_ode!/jac5! callback (ODEFUN5)
+        @test integ.f.jac isa WSJac5 && prob_phase5(u0, zn[1], zn, RecombinationODEParams(RM5, true)).f.jac !== prob.f.jac   # buffered Jacobian, fresh per problem
+        zb = PASS5B.z[1:40]; kw = (; reltol = 1.0e-12, abstol = abstol5(12; a1 = 1.0e-18, aex = 1.0e-14), saveat = zb, internalnorm = primal_norm)
+        pb = prob_phase5(u0, zb[1], zb, RecombinationODEParams(RM5, true))
+        sp = solve(pb, Rodas5P(); kw...)
+        so = solve(ODEProblem{true, SciMLBase.FullSpecialize}(ODEFUN5, u0, (zb[1], zb[end]), RecombinationODEParams(RM5, true)), Rodas5P(); kw...)
+        @test wsjac5_fallbacks(pb.f.jac) == 0 && pb.f.f.nfallback[] == 0          # every RHS and Jacobian call used its prepared workspace/cache
+        @test pb.f.f !== prob_phase5(u0, zb[1], zb, RecombinationODEParams(RM5, true)).f.f   # a fresh primal workspace per problem
+        @test sp.u == so.u && sp.stats.nf == so.stats.nf && sp.stats.njacs == so.stats.njacs && sp.stats.naccept == so.stats.naccept
+    end
+
     @testset "helium switch node and redshift reproduce the native decision" begin
         @test PASS5B.zswitch == SUM5["HE_OFF"] == 1680.9103034346122
         @test PASS5B.k_switch == 1342

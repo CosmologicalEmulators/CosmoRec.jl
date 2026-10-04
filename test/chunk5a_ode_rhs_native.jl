@@ -63,6 +63,19 @@ rec5a(k, v) = (OBS5A[k] = max(get(OBS5A, k, 0.0), v))
         @test ga == gb
     end
 
+    @testset "dp_fallback callable is specialized (no extra allocation from the pass-through)" begin
+        # in-table 12-state point: the factory fallback is never called, so the RHS with it must allocate exactly as the no-fallback model does;
+        # a despecialized (::Function) pass-through boxes the callable and the keyword tuples on every call and fails this
+        r = first(r for r in ROWS5A if r.flag && r.z == 2500.0 && r.pat == 0)
+        rmnf = RecombinationModel(RM5.eff, RM5.cosmos, nothing)
+        du = similar(r.y); dunf = similar(r.y)
+        alloc5a!(du, r, m) = @allocated recombination_rhs!(du, r.z, r.y, m; flag_He = true)
+        alloc5a!(du, r, RM5); alloc5a!(dunf, r, rmnf)           # warm (compile) both
+        alloc5a!(du, r, RM5); alloc5a!(dunf, r, rmnf)
+        @test du == dunf
+        @test alloc5a!(du, r, RM5) == alloc5a!(dunf, r, rmnf)
+    end
+
     @testset "info" begin
         foreach(kv -> println("Chunk5a-native ", kv[1], " = ", kv[2]), sort!(collect(OBS5A)))
     end

@@ -54,10 +54,14 @@ ode_background(rm::RecombinationModel, z; hscale = 1.0, nbscale = 1.0) =
     EffectiveBackground(cosmos_TCMB(rm.cosmos, z), nbscale * cosmos_NH(rm.cosmos, z), hscale * cosmos_H(rm.cosmos, z), cosmos_fHe(rm.cosmos))
 
 """Native `copy_ysol_to_LI`: packed `y` -> 15-entry `X` (unresolved He levels and, for `flag_He = 0`, all He slots set to `floor`; `X[1]` = `Xe` from the ground states)."""
-function ode_unpack(y::AbstractVector, fHe, flag_He::Bool; floor = 1.0e-300)
+const ODE_UNPACK_FLOOR = 1.0e-300
+function ode_unpack(y::AbstractVector, fHe, flag_He::Bool; floor = ODE_UNPACK_FLOOR)
     length(y) == ode_nstate(flag_He) || throw(DimensionMismatch("state length $(length(y)) != $(ode_nstate(flag_He)) for flag_He = $flag_He"))
     T = promote_type(eltype(y), typeof(fHe))
-    X = fill(T(floor), EFF_NEQ)
+    return _ode_unpack!(fill(T(floor), EFF_NEQ), y, fHe, flag_He)
+end
+# private in-place core (X pre-filled with the floor by the caller; the workspace path refills it); same assignments as before
+function _ode_unpack!(X, y, fHe, flag_He::Bool)
     X[15] = y[1]
     for k in 1:(1 + ODE_NRES_H)
         X[1 + k] = y[1 + k]            # X[2] = H 1s, X[3:7] = resolved H
@@ -83,6 +87,10 @@ function recombination_rhs!(f::AbstractVector, z, y::AbstractVector, rm::Recombi
     T = promote_type(eltype(X), typeof(bg.Tg), typeof(bg.NH), typeof(bg.Hz), typeof(z), feedback_eltype(rm.diffusion))
     g = Vector{T}(undef, EFF_NEQ)
     fcn_effective!(g, z, X, bg, rm.eff; dp_fallback = rm.dp_fallback, flag_He = flag_He, diffusion = rm.diffusion)
+    return _pack_rhs!(f, g, bg, z, flag_He)
+end
+# private: dy/dz from g (shared by the public RHS and the private workspace RHS)
+function _pack_rhs!(f, g, bg, z, flag_He::Bool)
     dz_dt = -bg.Hz * (1.0 + z)
     f[1] = g[15] / dz_dt
     for k in 1:(1 + ODE_NRES_H)
