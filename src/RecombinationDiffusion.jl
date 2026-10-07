@@ -41,13 +41,13 @@ One HI diffusion stage of `CosmoRec()`: population and pd/Dnem splines of the pr
 (`hi_pde_corrections`) and the feedback interpolation (`hi_diffusion_feedback`).
 """
 function hi_diffusion_stage(rm::RecombinationModel, d::HIDiffusionInputs, rows::AbstractMatrix; hscale = 1.0, nbscale = 1.0, levels = nothing,
-                            T::Type = promote_type(eltype(rows), typeof(hscale), typeof(nbscale), Float64))
+                            quadplan = nothing, T::Type = promote_type(eltype(rows), typeof(hscale), typeof(nbscale), Float64))
     # always the scaled background (multiplying by 1.0 is exact): a value/type branch here would drop the explicit hscale/nbscale dependence
     # of the PDE stage for AD systems that see plain Float64 parameters (Mooncake), as found in chunk10/probe_link_pde.log
     bg = ScaledBackground(rm.cosmos, hscale, nbscale)
     pops = HIPopulationSplines(rows; zs = d.zs, ze = d.ze)
     coef = hi_pde_coefficients(rows, pops, bg, d.htable, d.lnBitot, d.levels; zs = d.zs, ze = d.ze)
-    out = hi_pde_corrections(HIPDEModel(d.setup, pops, coef, bg); zs = d.zs, ze = d.ze, T = T, levels = levels)
+    out = hi_pde_corrections(HIPDEModel(d.setup, pops, coef, bg); zs = d.zs, ze = d.ze, T = T, levels = levels, quadplan = quadplan)
     return out, hi_diffusion_feedback(out)
 end
 
@@ -60,7 +60,7 @@ plus `passes` (all passes, the last one inside `final`) and `stages` (PDE output
 records or replays the quadrature stopping decisions (frozen-branch verification).
 """
 function recombination_history_diffusion(rm::RecombinationModel, θ, d::HIDiffusionInputs, solve_pass, solve_tail, zgrid::AbstractVector; hscale = 1.0, nbscale = 1.0,
-                                         patterson_levels = nothing, kwargs...)
+                                         patterson_levels = nothing, quadplan = nothing, kwargs...)
     passes = Any[]; stages = Any[]
     m = rm
     kw = (; hscale = hscale, nbscale = nbscale, kwargs...)
@@ -68,7 +68,7 @@ function recombination_history_diffusion(rm::RecombinationModel, θ, d::HIDiffus
         pass = recombination_pass(m, solve_pass; kw...)
         push!(passes, pass)
         out, fb = hi_diffusion_stage(rm, d, pass_solution_rows(pass); hscale = hscale, nbscale = nbscale,
-                                     levels = patterson_levels === nothing ? nothing : patterson_levels[it + 1])
+                                     levels = patterson_levels === nothing ? nothing : patterson_levels[it + 1], quadplan = quadplan)
         push!(stages, out)
         m = with_diffusion(rm, fb)
     end

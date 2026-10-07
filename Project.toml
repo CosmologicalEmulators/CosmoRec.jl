@@ -3,12 +3,23 @@ uuid = "39e2b558-4a43-499d-9ffb-227d2c5c6032"
 authors = ["Marco Bonici <bonici.marco@gmail.com>"]
 version = "0.0.1"
 
+[weakdeps]
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
+
+[extensions]
+CosmoRecChainRulesCoreExt = "ChainRulesCore"
+CosmoRecMooncakeExt = ["ChainRulesCore", "Mooncake"]
+
 [compat]
+ChainRulesCore = "1.26"
+Mooncake = "0.5.61"
 julia = "1.12"
 
 [extras]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -25,4 +36,4 @@ Sparspak = "e56a9233-b9d6-4f03-8d0f-1825330902ac"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["ADTypes", "BenchmarkTools", "DifferentiationInterface", "ForwardDiff", "LinearAlgebra", "LinearSolve", "Mooncake", "OrdinaryDiffEqBDF", "OrdinaryDiffEqRosenbrock", "Random", "SHA", "SciMLBase", "SciMLSensitivity", "SparseArrays", "Sparspak", "Test"]
+test = ["ADTypes", "BenchmarkTools", "ChainRulesCore", "DifferentiationInterface", "ForwardDiff", "LinearAlgebra", "LinearSolve", "Mooncake", "OrdinaryDiffEqBDF", "OrdinaryDiffEqRosenbrock", "Random", "SHA", "SciMLBase", "SciMLSensitivity", "SparseArrays", "Sparspak", "Test"]

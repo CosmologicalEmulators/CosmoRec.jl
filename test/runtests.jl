@@ -45,4 +45,6 @@ using Test
     include("chunk10a_runmode0_native.jl")
     include("chunk10b_runmode0_ad.jl")
     include("chunk10d_background_link_ad.jl")
+    include("chunk11_quadplan_ad.jl")
+    include("chunk11b_quadplan_stage_ad.jl")
 end

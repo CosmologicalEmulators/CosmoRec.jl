@@ -48,16 +48,22 @@ function _hi_calc_DF(s, a, b, epsabs, rec::Union{Nothing,PattersonLevels} = noth
     return (r, abs(_primal(r) - _primal(r7)) <= max(epsabs, abs(_primal(r)) * HI_EPSREL_DF))
 end
 
-function _hi_integral_over_resonances(m::HIPDEModel, s, xmin, xmax, nmin::Int, nmax::Int, rec = nothing)
-    nu21 = m.atom.nu21
+# native interval boundaries: xmin, xmin(1+0.005), then x_res(n)(1 -/+ dx) for n = nmin..nmax, xmax(1-dx), xmax
+# (shared by the default path and the fixed-geometry quadrature plans of HIPDEQuadPlan.jl)
+function _hi_resonance_edges(atom::HIPDEAtom, xmin, xmax, nmin::Int, nmax::Int)
+    nu21 = atom.nu21
     dx_x = 1.0e-4
-    # native interval boundaries: xmin, xmin(1+0.005), then x_res(n)(1 -/+ dx) for n = nmin..nmax, xmax(1-dx), xmax
     edges = [xmin, xmin * (1.0 + 0.005)]
     for n in nmin:nmax
-        xres = m.atom.lyn[n - 1].nu21 / nu21
+        xres = atom.lyn[n - 1].nu21 / nu21
         push!(edges, xres * (1.0 - dx_x), xres * (1.0 + dx_x))
     end
     push!(edges, xmax * (1.0 - dx_x), xmax)
+    return edges
+end
+
+function _hi_integral_over_resonances(m::HIPDEModel, s, xmin, xmax, nmin::Int, nmax::Int, rec = nothing)
+    edges = _hi_resonance_edges(m.atom, xmin, xmax, nmin, nmax)
     epsabs = 1.0e-60
     r = zero(eltype(s.y)); sabs = 0.0; nunc = 0
     for i in 1:(length(edges) - 1)
@@ -67,6 +73,11 @@ function _hi_integral_over_resonances(m::HIPDEModel, s, xmin, xmax, nmin::Int, n
     end
     return r, sabs, nunc   # sabs = sum of |sub-integrals|; nunc = number of sub-integrals that never met the native stopping rule
 end
+
+# integration limits of the production blocks (shared by the default path and the quadrature plans; expressions unchanged)
+_hi_limits_di1(x, nnu) = (max(x[1], 0.5), min(x[nnu], 1.0))
+_hi_limits_two3(x, nnu, a::HIPDEAtom) = (nui1 = a.Dnu_1s[3]; nu21 = a.nu21; (max(0.5 * nui1 / nu21, x[1]), min(nui1 / nu21, x[nnu - 1])))
+_hi_limits_raman(x, k0, nnu, a::HIPDEAtom) = (nui1 = a.Dnu_1s[2]; nu21 = a.nu21; (max(nui1 / nu21, x[k0 + 1]), x[nnu + k0 - 1]))
 
 """
     hi_pde_integrals(m, z, y, st)
@@ -78,7 +89,7 @@ The production correction integrals at an output redshift `z` from the spectrum 
 resonance-split integrals `|r|` is replaced by the sum of the absolute sub-integrals, because the integrand changes sign and the native Patterson
 tolerances (epsrel_HI = 1e-5) apply to the individual sub-integrals).
 """
-function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; levels = nothing)
+function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; levels = nothing, quadplan = nothing)
     s = m.setup; a = m.atom; k = m.k; x = s.x; np = length(x)
     nu21 = a.nu21
     Tg = cosmos_TCMB(m.cosmos, z)
@@ -93,8 +104,13 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             f_x = exp_i1 * (1.0 / st.exp_x[i] - 1.0)
             F[i] = (y[i] * f_x - nu2s * Dnem) * st.P2g_ns[1][i]
         end
-        sp = natural_cubic_spline(x[1:nnu], F)
-        r, ok = _hi_calc_DF(sp, max(x[1], 0.5), min(x[nnu], 1.0), 1.0e-60, levels)
+        if quadplan === nothing
+            sp = natural_cubic_spline(x[1:nnu], F)
+            lim = _hi_limits_di1(x, nnu)
+            r, ok = _hi_calc_DF(sp, lim[1], lim[2], 1.0e-60, levels)
+        else
+            r, ok = _hi_plan_single(quadplan.di1, F, levels)
+        end
         r = r / PROF_A2S1S(m)
         DnLj = _pde_Xnl(m, z, 2, 0) / X1s - exp_i1
         (PROF_A2S1S(m) * (r + DnLj), PROF_A2S1S(m) * (abs(_primal(r)) + abs(_primal(DnLj))), Int(!ok))
@@ -127,9 +143,13 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             f_x = exp_i1 * (1.0 / st.exp_x[i] - 1.0)
             F[i] = (y[i] * f_x - nu21 * Dnem) * P[i]
         end
-        sp = natural_cubic_spline(x[1:nnu], F)
-        xmin = max(0.5 * nui1 / nu21, x[1]); xmax = min(nui1 / nu21, x[nnu - 1])
-        r, sabs, nunc = _hi_integral_over_resonances(m, sp, xmin, xmax, 2, ni - 1, levels)
+        r, sabs, nunc = if quadplan === nothing
+            sp = natural_cubic_spline(x[1:nnu], F)
+            xmin, xmax = _hi_limits_two3(x, nnu, a)
+            _hi_integral_over_resonances(m, sp, xmin, xmax, 2, ni - 1, levels)
+        else
+            _hi_plan_resonances(quadplan.two3, F, levels)
+        end
         (w * (r - DRtot), w * (sabs + abs(_primal(DRtot))), nunc)
     end
     # Raman 2s (compute_DF_Raman(2, 0, nmax = nresmax = 3))
@@ -159,9 +179,13 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             f_x = exp_i1 * (1.0 / st.exp_x[i + k0] - 1.0)
             F[i] = (y[i + k0] * f_x - nu21 * Dnem) * st.PR_ns[1][i + k0]
         end
-        sp = natural_cubic_spline(x[(k0 + 1):np], F)
-        xmin = max(nui1 / nu21, x[k0 + 1]); xmax = x[nnu + k0 - 1]
-        r, sabs, nunc = _hi_integral_over_resonances(m, sp, xmin, xmax, ni + 1, nmax, levels)
+        r, sabs, nunc = if quadplan === nothing
+            sp = natural_cubic_spline(x[(k0 + 1):np], F)
+            xmin, xmax = _hi_limits_raman(x, k0, nnu, a)
+            _hi_integral_over_resonances(m, sp, xmin, xmax, ni + 1, nmax, levels)
+        else
+            _hi_plan_resonances(quadplan.raman, F, levels)
+        end
         (w * (r - DRtot), w * (sabs + abs(_primal(DRtot))), nunc)
     end
     return (values = (DI1[1], DF2g[1][1], DF2g[2][1], DFR[1]), scale = (DI1[2], DF2g[1][2], DF2g[2][2], DFR[2]),
@@ -175,11 +199,12 @@ PROF_A2S1S(m::HIPDEModel) = m.setup.prof.A2s1s
 The production PDE stage of one diffusion iteration (`compute_DPesc_with_diffusion_equation_effective`): march the spectrum from `zs` to `ze` and evaluate
 the correction integrals at every output (`zout < zs - 10`). Returns `(z, DI1_2s, DF_2g = [3s, 3d], DF_R = [2s], scale, y)` (`scale`: residual scales of\nthe four outputs, see `hi_pde_integrals`; `y`: final spectrum).
 """
-function hi_pde_corrections(m::HIPDEModel; zs = 2500.0, ze = 500.0, T::Type = Float64, levels = nothing, kwargs...)
+function hi_pde_corrections(m::HIPDEModel; zs = 2500.0, ze = 500.0, T::Type = Float64, levels = nothing, quadplan = nothing, kwargs...)
+    quadplan === nothing || _check_quadplan(quadplan, m.setup, m.atom)    # full-grid stale-plan guard, before the march
     zo = Float64[]; vals = [T[] for _ in 1:4]; scs = [Float64[] for _ in 1:4]; unc = [Int[] for _ in 1:4]
     cb = (k, zin, zout, y, S) -> begin
         if zout < zs - 10.0
-            r = hi_pde_integrals(m, zout, y, S.prev; levels = levels)
+            r = hi_pde_integrals(m, zout, y, S.prev; levels = levels, quadplan = quadplan)
             push!(zo, zout)
             for q in 1:4
                 push!(vals[q], r.values[q]); push!(scs[q], _primal(r.scale[q])); push!(unc[q], r.unconverged[q])
