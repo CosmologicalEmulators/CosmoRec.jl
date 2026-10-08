@@ -8,7 +8,7 @@ include("chunk5_helpers.jl")
 const OBS5D = Dict{String,Float64}()
 rec5d(k, v) = (OBS5D[k] = max(get(OBS5D, k, 0.0), v))
 # a1 = 1e-18 (was 1e-16, approved 2026-10-02): at a1 = 1e-16 the X1s weight a1 + reltol|X1s| is absolute-dominated for z > 1813 (X1s ~ 7e-10 at z = 3000), docs/ORIGINAL_VS_PORT_ACCURACY_INVESTIGATION.md 5.6
-const SOLVE5D = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14)
+const SOLVE5D = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const HIST5D = recombination_history(RM5, theta5(), SOLVE5D, solve_tail5, GRID5[:, 1])
 
 @testset "Chunk 5d: output assembly vs native Xe_arr, Te_arr" begin

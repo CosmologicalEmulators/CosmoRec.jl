@@ -15,7 +15,7 @@ rec5e(k, v) = (OBS5E[k] = max(get(OBS5E, k, 0.0), v))
 
 # a1 = 1e-18 (was 1e-16, approved 2026-10-02): at a1 = 1e-16 the X1s weight a1 + reltol|X1s| is absolute-dominated for z > 1813 (X1s ~ 7e-10 at z = 3000), docs/ORIGINAL_VS_PORT_ACCURACY_INVESTIGATION.md 5.6
 const TOL5E = (1.0e-12, 1.0e-18, 1.0e-14)
-const SOLVEP5E = (a...) -> solve_phase5(a...; reltol = TOL5E[1], a1 = TOL5E[2], aex = TOL5E[3])
+const SOLVEP5E = (a...) -> solve_phase5(a...; reltol = TOL5E[1], a1 = TOL5E[2], aex = TOL5E[3], alg = Rodas5P(), tstops = false)
 const THETA5E = theta5()
 const P0_5E = [THETA5E[1], THETA5E[2], 1.0, 1.0]
 const PASS0_5E = recombination_pass(RM5, SOLVEP5E)

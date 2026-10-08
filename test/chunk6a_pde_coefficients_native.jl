@@ -77,7 +77,7 @@ rel6(a, b) = a == b ? 0.0 : abs(a - b) / max(abs(b), floatmin())
     end
 
     @testset "end to end: coefficients from the Julia pass" begin
-        pass = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14))   # a1 1e-18: production forward config (was 1e-16)
+        pass = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false))   # a1 1e-18: production forward config (was 1e-16)
         rowsJ = pass_rows6(pass)
         popsJ = HIPopulationSplines(rowsJ; zs = ZS6, ze = ZE6)
         csJ = hi_pde_coefficients(rowsJ, popsJ, ACC5, HTAB6, LNBITOT6, NATIVE_HI_PDE_LEVELS; zs = ZS6, ze = ZE6)

@@ -32,7 +32,7 @@ pub5g(z, y, rm; flag_He, hscale = 1.0, nbscale = 1.0) = recombination_rhs(z, y, 
         end
     end
     @testset "diffusion feedback model (pass-1 feedback)" begin
-        S = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14)
+        S = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
         p0 = recombination_pass(RM5, S); (_, fb) = hi_diffusion_stage(RM5, HIDiffusionInputs(SETUP7, HTAB6, LNBITOT6), pass_solution_rows(p0))
         RMF = with_diffusion(RM5, fb)
         for k in (1, 500, 1342, 2000, 2900)
@@ -101,7 +101,7 @@ pub5g(z, y, rm; flag_He, hscale = 1.0, nbscale = 1.0) = recombination_rhs(z, y, 
         ws = CosmoRec._rhs_workspace(r12.y, r12.z, RM5)
         f2 = zeros(12); used = CosmoRec._recombination_rhs_ws!(f2, r12.z, r12.y, rm2, ws; flag_He = true)
         @test used && f2 == pub5g(r12.z, r12.y, rm2; flag_He = true) && f2 != pub5g(r12.z, r12.y, RM5; flag_He = true)
-        p0 = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14))
+        p0 = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false))
         rmd = with_diffusion(RM5, hi_diffusion_stage(RM5, HIDiffusionInputs(SETUP7, HTAB6, LNBITOT6), pass_solution_rows(p0))[2])   # different model type
         f3 = zeros(12)
         @test !(rmd isa typeof(RM5)) && !CosmoRec._recombination_rhs_ws!(f3, r12.z, r12.y, rmd, ws; flag_He = true) && f3 == pub5g(r12.z, r12.y, rmd; flag_He = true)

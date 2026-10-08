@@ -2,6 +2,7 @@
 
 Scope: the **caller-supplied** Rodas5P reference callback in `test/chunk5_helpers.jl` (`ODEFUN5`, `solve_phase5`). The library has **no solver default**:
 callers that build their own `ODEProblem` get these benefits only if they make the same choice. Plan and diagnostics: `docs/SCIML_ODE_PERFORMANCE_REVIEW.md`.
+Update 2026-10-07: the `solve_phase5` defaults are now Rodas4P / reltol 1e-10 / a1 1e-18 / aex 1e-12 / `tstops = znodes` (measured -50% forward config, CMB Tier A verified); the legacy tight config (Rodas5P / 1e-12 / 1e-18 / 1e-14, `tstops = false`) is pinned explicitly at all fixture-gated tests and benchmark call sites, and the step numbers below refer to it. The library itself still has no solver default.
 Artifacts are text files outside git in `A/chunk18/`, where `A = cmbcheb_test/local_analysis/cosmorec_differentiability_20260930`. Nothing is committed.
 
 **Baseline for every step** = the CURRENT validated working tree, not `c5a12b9`:

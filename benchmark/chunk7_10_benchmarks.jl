@@ -28,7 +28,7 @@ display(@benchmark ForwardDiff.derivative(stage, 0.0) samples = 3 evals = 1)
 println()
 # ---- Chunks 9a, 10a: feedback construction, a feedback ODE pass, one diffusion stage, the full runmode-0 iteration (public path) ----
 @isdefined(solve_phase5) || include(joinpath(@__DIR__, "..", "test", "chunk5_helpers.jl"))
-const SOLVEB = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-16, aex = 1.0e-14)
+const SOLVEB = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-16, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const D10 = HIDiffusionInputs(SETUP7, HTAB6, LNBITOT6)
 const OUT = hi_pde_corrections(MODEL)
 println("\n9a: hi_diffusion_feedback (4 splines of 199 outputs)"); display(@benchmark hi_diffusion_feedback($OUT) samples = 200 evals = 1)

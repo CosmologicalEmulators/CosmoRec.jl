@@ -1,7 +1,7 @@
 # Chunk 5c/5d benchmark: Recfast tail, output assembly and the complete single pass (BenchmarkTools only). REQUIRES COSMOREC_NATIVE_DATA_DIR.
 using BenchmarkTools, CosmoRec
 include(joinpath(@__DIR__, "..", "test", "chunk5_helpers.jl"))
-const SOLVE = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-16, aex = 1.0e-14)
+const SOLVE = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-16, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const θ = theta5(); const Hf = hfun5()
 const P0 = recombination_pass(RM5, SOLVE)
 const INP = recfast_tail_inputs(RM5, P0.z[end], P0.states[end])

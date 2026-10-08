@@ -9,7 +9,7 @@ include("chunk5_helpers.jl")
 const OBS5C = Dict{String,Float64}()
 rec5c(k, v) = (OBS5C[k] = max(get(OBS5C, k, 0.0), v))
 # a1 = 1e-18 (was 1e-16, approved 2026-10-02): at a1 = 1e-16 the X1s weight a1 + reltol|X1s| is absolute-dominated for z > 1813 (X1s ~ 7e-10 at z = 3000), docs/ORIGINAL_VS_PORT_ACCURACY_INVESTIGATION.md 5.6
-const SOLVE5C = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14)
+const SOLVE5C = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const PASS5C = recombination_pass(RM5, SOLVE5C)
 const TAIL_NATIVE = OUT5[3001:3199, :]              # z, Xe, Te for tail nodes i = 1..199
 const NATIVE_ATOL5C = (1.0e-10, 1.0e-8, 1.0e-10)

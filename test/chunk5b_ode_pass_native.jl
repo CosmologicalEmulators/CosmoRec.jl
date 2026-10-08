@@ -9,7 +9,7 @@ include("chunk5_helpers.jl")
 const OBS5B = Dict{String,Float64}()
 rec5b(k, v) = (OBS5B[k] = max(get(OBS5B, k, 0.0), v))
 # a1 = 1e-18 (was 1e-16, approved 2026-10-02): at a1 = 1e-16 the X1s weight a1 + reltol|X1s| is absolute-dominated for z > 1813 (X1s ~ 7e-10 at z = 3000), docs/ORIGINAL_VS_PORT_ACCURACY_INVESTIGATION.md 5.6
-const SOLVE5B = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14)
+const SOLVE5B = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const PASS5B = recombination_pass(RM5, SOLVE5B)
 
 @testset "Chunk 5b: one native pass vs the SciML pass" begin
@@ -95,7 +95,7 @@ const PASS5B = recombination_pass(RM5, SOLVE5B)
     end
 
     @testset "solver self-consistency (tolerance halving)" begin
-        p2 = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-13, a1 = 1.0e-17, aex = 1.0e-16))
+        p2 = recombination_pass(RM5, (a...) -> solve_phase5(a...; reltol = 1.0e-13, a1 = 1.0e-17, aex = 1.0e-16, alg = Rodas5P(), tstops = false))
         @test p2.k_switch == PASS5B.k_switch
         d = maximum(abs.(p2.Xe .- PASS5B.Xe) ./ PASS5B.Xe); rec5b("self:Xe", d); @test d < 1e-8
         d = maximum(abs.(p2.Te .- PASS5B.Te) ./ PASS5B.Te); rec5b("self:Te", d); @test d < 1e-8

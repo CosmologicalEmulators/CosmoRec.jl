@@ -39,7 +39,7 @@ end
 using ForwardDiff
 using SciMLBase: ODEFunction, ODEProblem, solve
 import SciMLBase
-using OrdinaryDiffEqRosenbrock: Rodas5P
+using OrdinaryDiffEqRosenbrock: Rodas5P, Rodas4P
 
 function jac5!(Jm, u, p, z)
     Jm .= ForwardDiff.jacobian(uu -> (du = similar(uu); recombination_ode!(du, uu, p, z); du), u); return nothing
@@ -140,9 +140,13 @@ end
 wsjac5_fallbacks(j::WSJac5) = j.nfallback[] + j.f.nfallback[]
 odefun5(u0, p, z0) = ODEFunction{true, SciMLBase.FullSpecialize}(RHSWS5(u0, p, z0); jac = prepare_wsjac5(u0, p, z0), tgrad = tgrad5!)
 prob_phase5(u0, z0, znodes, p) = ODEProblem{true, SciMLBase.FullSpecialize}(odefun5(u0, p, z0), u0, (z0, znodes[end]), p)
-function solve_phase5(f!, u0, z0, znodes, p; alg = Rodas5P(), reltol = 1.0e-9, a1 = 1.0e-12, aex = 1.0e-30, sensealg = nothing)
+# Defaults = the measured forward config (-50% stage-B wall vs the legacy tight config; CMB Tier A verified vs native-history CAMB, l = 2..10000): Rodas4P, reltol 1e-10,
+# a1 1e-18, aex 1e-12 (the literal), solver steps forced onto the save nodes (tstops = znodes). The tight legacy config is alg = Rodas5P(), reltol 1e-12, a1 1e-18,
+# aex 1e-14, tstops = false; every fixture-gated regression test pins it explicitly (the trajectories of those tests do not depend on these defaults).
+function solve_phase5(f!, u0, z0, znodes, p; alg = Rodas4P(), reltol = 1.0e-10, a1 = 1.0e-18, aex = 1.0e-12, tstops = true, sensealg = nothing)
     prob = prob_phase5(u0, z0, znodes, p)
     kw = (; reltol = reltol, abstol = abstol5(length(u0); a1 = a1, aex = aex), saveat = znodes, internalnorm = primal_norm)
+    tstops && (kw = merge(kw, (; tstops = znodes)))
     sol = sensealg === nothing ? solve(prob, alg; kw...) : solve(prob, alg; kw..., sensealg = sensealg)
     SciMLBase.successful_retcode(sol) || error("ODE solve failed: retcode = $(sol.retcode) after $(length(sol.u)) saved nodes (z0 = $z0)")
     return reduce(hcat, sol.u)

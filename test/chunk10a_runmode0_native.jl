@@ -25,7 +25,7 @@ function read_fixture10(path)
 end
 const V10, M10 = read_fixture10(FIX10A)
 # a1 = 1e-18 (was 1e-16, approved 2026-10-02): at a1 = 1e-16 the X1s weight a1 + reltol|X1s| is absolute-dominated for z > 1813 (X1s ~ 7e-10 at z = 3000), docs/ORIGINAL_VS_PORT_ACCURACY_INVESTIGATION.md 5.6
-const SOLVE10 = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14)
+const SOLVE10 = (a...) -> solve_phase5(a...; reltol = 1.0e-12, a1 = 1.0e-18, aex = 1.0e-14, alg = Rodas5P(), tstops = false)
 const D10 = HIDiffusionInputs(SETUP7, HTAB6, LNBITOT6)
 const ZREC10 = V10["ZREC"][1]
 const RUN10 = recombination_history_diffusion(RM5, theta5(), D10, SOLVE10, solve_tail5, ZREC10)
