@@ -107,6 +107,28 @@ function hi_rp_rm_pd(z, pops::HIPopulationSplines, t::AtomicRateTable, lnBitot::
     return RpRm, pd
 end
 
+"""
+    _hi_pd_only(z, pops, table, lnBitot, levels, Tg, Te, Ne, NH) -> pd
+
+Private: exactly the `pd` output of [`hi_rp_rm_pd`](@ref) (same `_setup` finiteness/table-domain checks, same `Bitot` interpolation and `Rm / (A + Rm)` expressions, same promoted element type), without the A/B/R rates
+and the `Rp` sums whose results [`hi_pde_coefficients`](@ref) discarded. `pd` depends only on `Bitot` and the atomic decay rate. The element type of the rate arrays that `hi_rp_rm_pd` promotes over is obtained from the
+types of the stencil weights and one `log_qnl_qe` value (no rate is evaluated). Public `get_rates_all` / `hi_rp_rm_pd` are unchanged.
+"""
+function _hi_pd_only(z, pops::HIPopulationSplines, t::AtomicRateTable, lnBitot::AbstractMatrix, lv::HIPDELevels, Tg, Te, Ne, NH)
+    lx, ly, a, b, db = _setup(t, Tg, Te)
+    n = n_resolved(t)
+    lq = log_qnl_qe(t, 1, Tg)
+    TA = db ? typeof(lq) : typeof(zero(a[1] * b[1]) + b[1] * (a[1] * t.A[1]) + lq)      # eltype of `A` in get_rates_all
+    TB = typeof(zero(a[1]) + a[1] * t.B[1])                                              # eltype of `B`
+    T = promote_type(TA, TB, typeof(Ne), typeof(NH), typeof(hi_Xi(pops, z, 0)))
+    pd = Vector{T}(undef, n)
+    for nr in 1:n
+        Rm = exp(a[1] * lnBitot[lx, nr] + a[2] * lnBitot[lx + 1, nr] + a[3] * lnBitot[lx + 2, nr] + a[4] * lnBitot[lx + 3, nr])
+        pd[nr] = lv.index[nr] == 1 ? Rm / (lv.A2s1s + Rm) : Rm / (lv.A21[nr] + Rm)
+    end
+    return pd
+end
+
 """The `pd` and `Dnem` coefficient splines of the PDE (native `HI_pd_eff_Data`, `HI_Dnem_eff_Data`): natural cubic splines of `ln pd_i` and `Dnem_i` on the coefficient grid `z`."""
 struct HIPDECoefficientSplines{S}
     z::Vector{Float64}
@@ -119,7 +141,7 @@ end
 
 Native `set_up_splines_for_HI_pd_Rp_effective(ze, zs, cosmos, HA, X_Data, 1, 1)`: grid = `init_xarr(ze/1.0001, zs*1.0001, nz, linear)` with `nz` = number of stored rows with
 `z >= ze/1.0001` (the native collection keeps the zero placeholders of the rows above `zs*1.0001`; the values are then overwritten by the linear grid); at each grid node `Tg = TCMB`, `Te = Tg rho(z)`, `NH`, `H` from the Cosmos accessors (4b), `pd` from
-[`hi_rp_rm_pd`](@ref) and `Dnem`: 2s `N2s/N1s - e^{-x}`; np (n >= 2) `(N_np/3/N1s - e^{-x}) (1 + (1/pd - 1) P_S)`, `P_S = (1 - e^{-tau_S})/tau_S`,
+[`hi_rp_rm_pd`](@ref) (computed by its private pd-only kernel `_hi_pd_only`, bitwise identical) and `Dnem`: 2s `N2s/N1s - e^{-x}`; np (n >= 2) `(N_np/3/N1s - e^{-x}) (1 + (1/pd - 1) P_S)`, `P_S = (1 - e^{-tau_S})/tau_S`,
 `tau_S = A21 lambda21^3 / (8 pi H) (3 N1s - N_np)`; ns, nd (n > 2) `N_i/N1s/(2l+1) - e^{-x}`; `x = h nu21 / (kB Tg)` with the level's `Dnu_1s`.
 """
 function hi_pde_coefficients(rows::AbstractMatrix, pops::HIPopulationSplines, cosmos, t::AtomicRateTable, lnBitot::AbstractMatrix, lv::HIPDELevels;
@@ -135,7 +157,7 @@ function hi_pde_coefficients(rows::AbstractMatrix, pops::HIPopulationSplines, co
     for k in 1:nz
         z = zg[k]
         Tg = cosmos_TCMB(cosmos, z); Te = Tg * hi_rho(pops, z); NH = cosmos_NH(cosmos, z); Hz = cosmos_H(cosmos, z)
-        _, pd = hi_rp_rm_pd(z, pops, t, lnBitot, lv, Tg, Te, NH * hi_Xe(pops, z), 1.0 - hi_Xi(pops, z, 0), NH)
+        pd = _hi_pd_only(z, pops, t, lnBitot, lv, Tg, Te, NH * hi_Xe(pops, z), NH)
         N1s = NH * hi_Xi(pops, z, 0)
         for m in 1:n
             i = lv.index[m]

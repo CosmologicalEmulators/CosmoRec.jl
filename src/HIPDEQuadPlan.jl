@@ -196,10 +196,51 @@ function _check_quadplan(q::HIQuadPlans, s::HIPDESetup, atom::HIPDEAtom)
 end
 
 """
+    _hi_fit_cached(q, F) -> NaturalCubicSpline
+
+Private: the natural cubic spline of the ACTIVE ordinates `F` on the plan's knots, fitted with the plan's stored Float64 geometry (`dx`, `g`, `off`, `alpha`, `t`, computed once by
+`_hi_fit_factors` with the same expressions as `natural_cubic_spline`) instead of recomputing it for every one of the integrals of every output. Operation order is that of
+`natural_cubic_spline` (`gamma = 3 (dy g - dy' g')`, the stored LDL factors, `b = dy/dx - dx (c + 2c')/3` and `d = Δc/(3 dx)` with divisions, not products with `g`), so all fields are
+BITWISE equal to it for Float64, Dual and BigFloat ordinates alike (the stored factors stay Float64, as in the constructor). `y`, `b`, `c`, `d` are fresh arrays owned by the result
+(`y` is a copy of `F`); only the read-only `knots` of the plan are shared (a spline never mutates them), and the plan itself is never written, so one plan may serve concurrent calls.
+Contract: the plan geometry is validated once by `_hi_quad_plan` (`_check_quadplan` guards the stage path); the plan's vectors are mutable, so each call re-checks in O(n) the lengths of the stored
+factors against `F`, that the ACTUAL knots are strictly increasing (ArgumentError, as the generic constructor) and that every stored `dx[i]` equals the actual `xs[i+1] - xs[i]` (rejects stale factors
+of sorted-but-shifted knots). It does not re-derive `g`, `off`, `alpha`, `t` (no refactorisation, no cache). Narrow element types: `gamma` is converted to `T` at the point where the constructor stores it.
+"""
+function _hi_fit_cached(q::HIQuadPlan, F::AbstractVector{T}) where {T<:Real}
+    xs = q.knots; n = length(xs); N = n - 2
+    dx = q.dx; g = q.g; off = q.off; alpha = q.alpha; tt = q.t
+    (n >= 3 && length(F) == n && length(dx) == n - 1 && length(g) == n - 1 && length(off) == N && length(alpha) == N && length(tt) == N) ||
+        throw(DimensionMismatch("_hi_fit_cached: need length(F) == length(plan knots) >= 3 and stored factors of matching length"))
+    @inbounds for i in 1:(n - 1)                  # actual knots strictly increasing (the generic constructor's domain error) AND the stored spacing is theirs
+        h = xs[i + 1] - xs[i]
+        h > 0.0 || throw(ArgumentError("_hi_fit_cached: plan knots must be strictly increasing (natural_cubic_spline: x must be strictly increasing)"))
+        h == dx[i] || throw(ArgumentError("_hi_fit_cached: stored fit factors are stale (dx[$i] differs from the knot spacing); rebuild the plan"))
+    end
+    y = collect(F)
+    c = zeros(T, n); z = Vector{T}(undef, N)
+    for i in 1:N
+        gam = convert(T, 3.0 * ((y[i + 2] - y[i + 1]) * g[i + 1] - (y[i + 1] - y[i]) * g[i]))      # natural_cubic_spline stores gamma in a Vector{T} BEFORE the forward substitution
+        z[i] = i == 1 ? gam : gam - tt[i] * z[i - 1]
+    end
+    c[N + 1] = z[N] / alpha[N]
+    for i in (N - 1):-1:1
+        c[i + 1] = (z[i] - off[i] * c[i + 2]) / alpha[i]
+    end
+    b = Vector{T}(undef, n - 1); d = Vector{T}(undef, n - 1)
+    for i in 1:(n - 1)
+        h = dx[i]
+        b[i] = (y[i + 1] - y[i]) / h - h * (c[i + 1] + 2.0 * c[i]) / 3.0
+        d[i] = (c[i + 1] - c[i]) / (3.0 * h)
+    end
+    return NaturalCubicSpline{T}(xs, y, b, c, d)
+end
+
+"""
     _hi_spline_parts(q, F, forced) -> (parts, levels, ok)
 
-Pure, generic: the `K` sub-integrals of the natural cubic spline of `F` on the plan's knots, computed by the unchanged primal code
-(`natural_cubic_spline`, `patterson_integrate` with the native epsabs chain and the level-7 `ok` test of `_hi_calc_DF`). `forced[i] > 0` replays that
+Pure, generic: the `K` sub-integrals of the natural cubic spline of `F` on the plan's knots, computed by the unchanged primal arithmetic
+(the plan's cached-geometry fit `_hi_fit_cached`, bitwise `natural_cubic_spline`; `patterson_integrate` with the native epsabs chain and the level-7 `ok` test of `_hi_calc_DF`). `forced[i] > 0` replays that
 level. `levels[i] == 0` marks an empty sub-interval (contributes zero, not recorded). Reverse rules: optional extensions (Float64 `Vector` only).
 """
 # private level contract: 0 = adaptive (forced) / empty sub-interval (returned levels), 1:8 = Patterson rule index (PATTERSON_NPOINTS)
@@ -213,7 +254,7 @@ end
 function _hi_spline_parts(q::HIQuadPlan{K}, F::AbstractVector, forced::NTuple{K,Int}) where {K}
     length(F) == length(q.knots) || throw(DimensionMismatch("_hi_spline_parts: length(F) != number of plan knots"))
     _hi_check_levels(forced, "_hi_spline_parts forced levels")
-    s = natural_cubic_spline(q.knots, F)
+    s = _hi_fit_cached(q, F)                      # bitwise natural_cubic_spline(q.knots, F), with the plan's stored geometry
     T = eltype(s.y)
     f = t -> spline_eval_native(s, t)
     epsabs = q.epsabs0

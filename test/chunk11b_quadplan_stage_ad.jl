@@ -15,6 +15,9 @@ using Test
 
 function run_worker11b(mode, dir, seed = 2705)
     out = joinpath(dir, "chunk11b_$(mode)_$(seed).tsv")
+    # resource safety only: release unreachable preparations of earlier testsets in THIS process before a ~10-13 GB worker allocates (no case/gate is skipped)
+    GC.gc(true); GC.gc(true)
+    println("Chunk11b parent RSS before worker[$mode,$seed]: ", round(Sys.maxrss() / 2^20; digits = 0), " MB (max), GC live ", round(Base.gc_live_bytes() / 2^20; digits = 0), " MB")
     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(joinpath(@__DIR__, "chunk11b_stage_worker.jl")) $mode $out $seed`
     ok = success(pipeline(cmd; stdout = stdout, stderr = stderr))
     d = Dict{String,String}()

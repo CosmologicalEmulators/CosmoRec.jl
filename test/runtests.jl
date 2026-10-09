@@ -1,6 +1,10 @@
 using Test
 
 @testset "CosmoRec.jl" begin
+    # Resource order (no scientific coupling: this file needs only `Test` and COSMOREC_NATIVE_DATA_DIR; its large Mooncake workers run in fresh sequential
+    # processes with their own helpers and fixed seeds): run the ~10-13 GB workers while this parent process is still light, instead of after it has
+    # retained MC/JIT state from the in-process tests below (the monolithic run was OOM-killed at parent 12-16 GiB + worker 10-13 GiB).
+    include("chunk11b_quadplan_stage_ad.jl")
     include("chunk1a_stiff_ad_probe.jl")
     include("chunk1b_radiation_shaped_probe.jl")
     include("chunk1c_nonlinear_probe.jl")
@@ -34,8 +38,10 @@ using Test
     include("chunk5f_prepared_jac_mooncake.jl")
     include("chunk5g_rhs_workspace.jl")
     include("chunk5h_jacobian_workspace.jl")
+    include("chunk5i_time_gradient_workspace.jl")
     include("chunk6a_pde_coefficients_native.jl")
     include("chunk6a_pde_coefficients_ad.jl")
+    include("chunk6b_pd_only_coefficients.jl")
     include("chunk7a_pde_setup_native.jl")
     include("chunk7b_pde_define_native.jl")
     include("chunk7c_pde_march_native.jl")
@@ -46,5 +52,5 @@ using Test
     include("chunk10b_runmode0_ad.jl")
     include("chunk10d_background_link_ad.jl")
     include("chunk11_quadplan_ad.jl")
-    include("chunk11b_quadplan_stage_ad.jl")
+    include("chunk11c_quadplan_cached_fit.jl")
 end

@@ -84,7 +84,7 @@ function (j::PreparedJac5{RHSAt5{P,Z}})(Jm, u, p, z) where {P,Z}
 end
 # Per-solve PRIMAL RHS workspace (Step 3 increment 1; private CosmoRec._rhs_workspace / _recombination_rhs_ws!, same result as recombination_ode!).
 # Built from the solve's actual u0/p/z0 types; a call with other argument types runs the public allocating path (counted in `nfallback`). The state
-# Jacobian (PreparedJac5) and the time gradient keep using the allocating recombination_ode!.
+# Jacobian (PreparedJac5) keeps using the allocating recombination_ode!.
 struct RHSWS5{W}
     ws::W
     nfallback::Base.RefValue{Int}
@@ -138,7 +138,67 @@ function (j::WSJac5{BufRHS5{W,P,Z}})(Jm, u, p, z) where {W,P,Z}
     return nothing
 end
 wsjac5_fallbacks(j::WSJac5) = j.nfallback[] + j.f.nfallback[]
-odefun5(u0, p, z0) = ODEFunction{true, SciMLBase.FullSpecialize}(RHSWS5(u0, p, z0); jac = prepare_wsjac5(u0, p, z0), tgrad = tgrad5!)
+# Per-solve PREPARED time gradient (caller callback only; docs/ODE_CORE_WORKSPACE_DESIGN.md pattern of §8 applied to d f/d z): ONE Dual-redshift RHS workspace and a scalar
+# ForwardDiff.DerivativeConfig built from the solve's ACTUAL u0/p/z0 types; the mutating `ForwardDiff.derivative!` differentiates the functor `BufTG5`, which writes the LIVE u and p
+# of each call (z arrives as the Dual argument). The Dual output element type is read from `promote_type(eltype(u0), Dual{tag,typeof(z0),1})`, the type the unprepared tgrad5! gives
+# its output vector (a promotion that is not of the form Dual{tag,Y,1} makes every call take the oracle). Tag: FAMILY tag Tag{BufTG5,V} (as 5h's BufRHS5), which keeps the
+# workspace type free of itself; V = promote of ALL input element types (state, z, hscale, nbscale, feedback), so any outer Dual's tag type is part of V and the tagcount ForwardDiff assigns
+# at first construction of Tag{BufTG5,V} orders above every Dual already present in u0/p/z0 (a V that omitted e.g. the state's tag would reuse a stale, lower count). For a scalar x ForwardDiff's default `checktag` falls to its permissive method (no throw); checktag(cfg, ...) is kept as the pinned default.
+# A call whose u/p/z types differ from the prepared ones runs the unprepared oracle tgrad5! (counted in `nfallback`), never a conversion. No state is shared across solves.
+mutable struct BufTG5{W,U,P}
+    ws::W
+    u::U
+    p::P
+    nfallback::Base.RefValue{Int}
+end
+function (b::BufTG5)(du, zd)
+    CosmoRec._recombination_rhs_ws!(du, zd, b.u, b.p.rm, b.ws; flag_He = b.p.flag, hscale = b.p.hscale, nbscale = b.p.nbscale) || (b.nfallback[] += 1)
+    return nothing
+end
+function buftg5_tag(::Type{V}) where {V}
+    TT = ForwardDiff.Tag{BufTG5,V}
+    ForwardDiff.tagcount(TT)                         # internal ForwardDiff API: what Tag(f, V) does for a concrete f
+    return TT()
+end
+struct WSTGrad5{B,C,Y,Z}
+    f::B
+    cfg::C
+    y::Y
+    nfallback::Base.RefValue{Int}
+    ncalls::Base.RefValue{Int}
+end
+function prepare_wstgrad5(u0, p, z0)                 # factory (distinct name: no clash with the default constructor)
+    Z = typeof(z0)
+    V = promote_type(eltype(u0), Z, typeof(p.hscale), typeof(p.nbscale), CosmoRec.feedback_eltype(p.rm.diffusion))      # the family tag's V carries EVERY input element type (see above)
+    tag = buftg5_tag(V); T = typeof(tag)
+    PT = promote_type(eltype(u0), ForwardDiff.Dual{T,Z,1})
+    if !(PT <: ForwardDiff.Dual{T} && PT === ForwardDiff.Dual{T,PT.parameters[2],1})
+        return WSTGrad5{Nothing,Nothing,Nothing,Z}(nothing, nothing, nothing, Ref(0), Ref(0))      # unsupported promotion: every call takes the oracle
+    end
+    Y = PT.parameters[2]
+    ws = CosmoRec._rhs_workspace(u0, ForwardDiff.Dual{T}(z0, one(z0)), p.rm; hscale = p.hscale, nbscale = p.nbscale)
+    f = BufTG5(ws, u0, p, Ref(0)); y = Vector{Y}(undef, length(u0))
+    cfg = ForwardDiff.DerivativeConfig(f, y, z0, tag)
+    return WSTGrad5{typeof(f),typeof(cfg),typeof(y),Z}(f, cfg, y, Ref(0), Ref(0))
+end
+function (g::WSTGrad5{BufTG5{W,U,P},C,Y,Z})(dT, u, p, z) where {W,U,P,C,Y,Z}
+    g.ncalls[] += 1
+    if typeof(u) === U && p isa P && z isa Z
+        g.f.u = u; g.f.p = p
+        ForwardDiff.derivative!(dT, g.f, g.y, z, g.cfg)      # default tag check
+    else
+        g.nfallback[] += 1
+        tgrad5!(dT, u, p, z)
+    end
+    return nothing
+end
+function (g::WSTGrad5{Nothing})(dT, u, p, z)
+    g.ncalls[] += 1; g.nfallback[] += 1
+    tgrad5!(dT, u, p, z)
+    return nothing
+end
+wstgrad5_fallbacks(g::WSTGrad5) = g.nfallback[] + (g.f === nothing ? 0 : g.f.nfallback[])
+odefun5(u0, p, z0) = ODEFunction{true, SciMLBase.FullSpecialize}(RHSWS5(u0, p, z0); jac = prepare_wsjac5(u0, p, z0), tgrad = prepare_wstgrad5(u0, p, z0))
 prob_phase5(u0, z0, znodes, p) = ODEProblem{true, SciMLBase.FullSpecialize}(odefun5(u0, p, z0), u0, (z0, znodes[end]), p)
 # Defaults = the measured forward config (-50% stage-B wall vs the legacy tight config; CMB Tier A verified vs native-history CAMB, l = 2..10000): Rodas4P, reltol 1e-10,
 # a1 1e-18, aex 1e-12 (the literal), solver steps forced onto the save nodes (tstops = znodes). The tight legacy config is alg = Rodas5P(), reltol 1e-12, a1 1e-18,
