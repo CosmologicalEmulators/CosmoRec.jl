@@ -112,14 +112,19 @@ Native `Step_PDE_O2t(theta, zs, ze, x, y, y_low, y_up, PDE_D, def_PDE_Lyn_and_2s
 `du/dz = A u'' + B u' + C u + D` with Dirichlet boundaries, solved by the native banded elimination (operation order kept).
 """
 function hi_pde_step!(y::AbstractVector, S::HIPDEStepper, m::HIPDEModel, theta, zs, ze, y_low, y_up)
+    return _hi_pde_step!(y, S, m, theta, zs, ze, y_low, y_up, nothing)
+end
+
+# private worker (`hp`: see `_hi_pde_rhs_coefficients!`; `nothing` = full public state)
+function _hi_pde_step!(y::AbstractVector, S::HIPDEStepper, m::HIPDEModel, theta, zs, ze, y_low, y_up, hp)
     kap = theta - 1.0; eta = kap / theta
     dz = ze - zs
     n = length(y)
     if !S.initialized
-        hi_pde_rhs_coefficients!(S.prev, m, zs)
+        _hi_pde_rhs_coefficients!(S.prev, m, zs, hp)
         S.initialized = true
     end
-    hi_pde_rhs_coefficients!(S.cur, m, ze)
+    _hi_pde_rhs_coefficients!(S.cur, m, ze, hp)
     L = S.lambda; Lp = S.lambdap; b = S.bi; U = S.Ui; V = S.Vi; LG = S.LG
     # native point i (0-based) -> Julia row i+1
     _lambda_02!(L, 2, dz * theta, 2, 1, S.cur, LG); _lambda_02!(Lp, 2, dz * kap, 2, 1, S.prev, LG)
@@ -291,9 +296,17 @@ native step control. `on_step(step, zin, zout, y, S)` is called after every step
 Returns `(y, zout_list)`.
 """
 function hi_pde_march(m::HIPDEModel; zs = 2500.0, ze = 500.0, dz_out = 10.0, theta = 0.55, on_step = nothing, T::Type = Float64)
+    return _hi_pde_march(m, nothing; zs = zs, ze = ze, dz_out = dz_out, theta = theta, on_step = on_step, T = T)
+end
+
+# private march. `hp === nothing`: the public march (full state, any observer). `hp::UnitRange{Int}`: reduced `hp_phi` production for the CLOSED stage only: the stepper's `hp_phi` is NaN-poisoned once
+# outside `hp`, and the observer must be the stage's internal integral callback (it never reads `hp_phi`); it is never reachable from the public `hi_pde_march`.
+function _hi_pde_march(m::HIPDEModel, hp; zs = 2500.0, ze = 500.0, dz_out = 10.0, theta = 0.55, on_step = nothing, T::Type = Float64)
+    hp === nothing || (1 <= first(hp) && last(hp) <= length(m.setup.x) || throw(ArgumentError("_hi_pde_march: hp_phi span outside the grid")))
     x = m.setup.x
     y = zeros(T, length(x))
     S = HIPDEStepper{T}(x)
+    hp === nothing || (_hi_poison_hp!(S.cur, hp); _hi_poison_hp!(S.prev, hp))
     zin = zs; zout = zs; step = 0
     zl = Float64[]
     while true
@@ -301,7 +314,7 @@ function hi_pde_march(m::HIPDEModel; zs = 2500.0, ze = 500.0, dz_out = 10.0, the
         zout = max(ze, zin - dz_out)
         xeval = x[1] * (1.0 + zin) / (1.0 + zout)
         y_low, _ = polint_jc(x, y, xeval, 6)
-        hi_pde_step!(y, S, m, th, zin, zout, y_low, zero(T))
+        _hi_pde_step!(y, S, m, th, zin, zout, y_low, zero(T), hp)
         push!(zl, zout)
         on_step === nothing || on_step(step, zin, zout, y, S)
         zin = zout; step += 1

@@ -89,12 +89,13 @@ The production correction integrals at an output redshift `z` from the spectrum 
 resonance-split integrals `|r|` is replaced by the sum of the absolute sub-integrals, because the integrand changes sign and the native Patterson
 tolerances (epsrel_HI = 1e-5) apply to the individual sub-integrals).
 """
-function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; levels = nothing, quadplan = nothing)
+function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; levels = nothing, quadplan = nothing, fitwork = nothing)
     s = m.setup; a = m.atom; k = m.k; x = s.x; np = length(x)
     nu21 = a.nu21
     Tg = cosmos_TCMB(m.cosmos, z)
     X1s = hi_Xi(m.pops, z, 0)
     T = promote_type(eltype(y), typeof(z), eltype(st.exp_x))
+    fitwork = _hi_stage_work(fitwork, quadplan, T)          # validates; `true` builds a work object for the ordinate type, a caller-owned one is used as is
     # DI1 2s-1s (compute_DI1_2s_and_dump_it)
     DI1 = let nnu = s.index_emission[1], nu2s = a.Dnu_1s[2]
         exp_i1 = exp(-k.h_kb * nu2s / Tg)
@@ -109,7 +110,7 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             lim = _hi_limits_di1(x, nnu)
             r, ok = _hi_calc_DF(sp, lim[1], lim[2], 1.0e-60, levels)
         else
-            r, ok = _hi_plan_single(quadplan.di1, F, levels)
+            r, ok = _hi_plan_single(quadplan.di1, F, levels, _hi_scratch_for(fitwork, :di1, F))
         end
         r = r / PROF_A2S1S(m)
         DnLj = _pde_Xnl(m, z, 2, 0) / X1s - exp_i1
@@ -148,7 +149,7 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             xmin, xmax = _hi_limits_two3(x, nnu, a)
             _hi_integral_over_resonances(m, sp, xmin, xmax, 2, ni - 1, levels)
         else
-            _hi_plan_resonances(quadplan.two3, F, levels)
+            _hi_plan_resonances(quadplan.two3, F, levels, _hi_scratch_for(fitwork, :two3, F))
         end
         (w * (r - DRtot), w * (sabs + abs(_primal(DRtot))), nunc)
     end
@@ -184,7 +185,7 @@ function hi_pde_integrals(m::HIPDEModel, z, y::AbstractVector, st::HIPDEState; l
             xmin, xmax = _hi_limits_raman(x, k0, nnu, a)
             _hi_integral_over_resonances(m, sp, xmin, xmax, ni + 1, nmax, levels)
         else
-            _hi_plan_resonances(quadplan.raman, F, levels)
+            _hi_plan_resonances(quadplan.raman, F, levels, _hi_scratch_for(fitwork, :raman, F))
         end
         (w * (r - DRtot), w * (sabs + abs(_primal(DRtot))), nunc)
     end
@@ -198,19 +199,31 @@ PROF_A2S1S(m::HIPDEModel) = m.setup.prof.A2s1s
 
 The production PDE stage of one diffusion iteration (`compute_DPesc_with_diffusion_equation_effective`): march the spectrum from `zs` to `ze` and evaluate
 the correction integrals at every output (`zout < zs - 10`). Returns `(z, DI1_2s, DF_2g = [3s, 3d], DF_R = [2s], scale, y)` (`scale`: residual scales of\nthe four outputs, see `hi_pde_integrals`; `y`: final spectrum).
+
+Keyword `reduced_profiles` (default `false`; must be a `Bool`): `true` skips the pointwise evaluation of the two-photon `hp_phi` profile entries that the stage never reads (all of `hp_phi[2]` and `hp_phi[1]` outside
+`index_2+1 : index_emission[2]`). The stage's only observer is its internal integral callback and it returns only corrections, so no incomplete `HIPDEState` is ever visible; outputs are bitwise those of the default. The public `hi_pde_march` / `hi_pde_rhs_coefficients!`
+always produce the full state.
+
+Keyword `fitwork` (opt-in, requires `quadplan`; default `nothing` = the allocating fit, unchanged): `true` builds one stage-owned `CosmoRec.HIQuadWork` (reusable spline-fit scratch, ~164 kB) for the stage's ordinate
+type; a caller-owned `HIQuadWork` is used as is (one per task/chain: it is mutated by every call and must not be shared by concurrent calls; plans may be shared). Results are bitwise those of the plan path.
+The scratch fit's spline is a borrowed, ephemeral view valid only inside one integral. A work object of another ordinate type, or a scratch of another size, is not coerced: those fits use the allocating oracle and
+are counted (`nmismatch`, `nfallback`). Reverse mode: supported through Mooncake (the scratch method is overlaid so later reads of the scratch are differentiated); there is no ChainRulesCore rule for it.
 """
-function hi_pde_corrections(m::HIPDEModel; zs = 2500.0, ze = 500.0, T::Type = Float64, levels = nothing, quadplan = nothing, kwargs...)
+function hi_pde_corrections(m::HIPDEModel; zs = 2500.0, ze = 500.0, T::Type = Float64, levels = nothing, quadplan = nothing, fitwork = nothing, reduced_profiles = false, kwargs...)
+    reduced_profiles isa Bool || throw(ArgumentError("reduced_profiles must be a Bool"))
+    reduced_profiles && haskey(kwargs, :on_step) && throw(ArgumentError("reduced_profiles does not support an on_step observer: the reduced state is incomplete"))
     quadplan === nothing || _check_quadplan(quadplan, m.setup, m.atom)    # full-grid stale-plan guard, before the march
+    fw = _hi_stage_work(fitwork, quadplan, promote_type(T, Float64))      # ordinates: promote(stage T, Float64 redshift, state T); one object for the whole stage
     zo = Float64[]; vals = [T[] for _ in 1:4]; scs = [Float64[] for _ in 1:4]; unc = [Int[] for _ in 1:4]
     cb = (k, zin, zout, y, S) -> begin
         if zout < zs - 10.0
-            r = hi_pde_integrals(m, zout, y, S.prev; levels = levels, quadplan = quadplan)
+            r = hi_pde_integrals(m, zout, y, S.prev; levels = levels, quadplan = quadplan, fitwork = fw)
             push!(zo, zout)
             for q in 1:4
                 push!(vals[q], r.values[q]); push!(scs[q], _primal(r.scale[q])); push!(unc[q], r.unconverged[q])
             end
         end
     end
-    y, _ = hi_pde_march(m; zs = zs, ze = ze, on_step = cb, T = T, kwargs...)
+    y, _ = _hi_pde_march(m, reduced_profiles ? _hi_hp_span(m.setup) : nothing; zs = zs, ze = ze, on_step = cb, T = T, kwargs...)
     return (z = zo, DI1_2s = vals[1], DF_2g = [vals[2], vals[3]], DF_R = [vals[4]], scale = Tuple(scs), unconverged = Tuple(unc), y = y)
 end

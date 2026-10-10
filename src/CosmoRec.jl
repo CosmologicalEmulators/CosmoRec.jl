@@ -46,6 +46,7 @@ include("HIPDESolver.jl")
 include("HIPDEIntegrals.jl")
 include("HIPDEQuadPlan.jl")
 include("HIDiffusionFeedback.jl")
+include("PrefixReuse.jl")
 include("RecombinationDiffusion.jl")
 include("RHSWorkspace.jl")
 

@@ -154,7 +154,7 @@ history up to the switch node, the 7-state history after it, the observables per
 The switch node is a DISCRETE quantity: no derivative of its location is defined.
 """
 function recombination_pass(rm::RecombinationModel, solve_ode; zstart::Float64 = 3000.0, zend::Float64 = 50.0, nz::Int = 3000, k_switch = nothing, block::Int = 50,
-                            hscale = 1.0, nbscale = 1.0, nodes = nothing)
+                            hscale = 1.0, nbscale = 1.0, nodes = nothing, prefix = nothing)
     zfull = init_xarr_linear(zstart, zend, nz)
     if nodes !== nothing                 # Chunk 5e: solve/report only the selected nodes (requires a frozen branch); the switch node and the end nodes are always included
         k_switch === nothing && throw(ArgumentError("recombination_pass: `nodes` requires a frozen `k_switch`"))
@@ -186,7 +186,7 @@ function recombination_pass(rm::RecombinationModel, solve_ode; zstart::Float64 =
         if k_switch !== nothing
             j = min(j, k_switch)
         end
-        sol = solve_ode(recombination_ode!, ys[i], zn[i], zn[i:j], p1)
+        sol = prefix === nothing ? solve_ode(recombination_ode!, ys[i], zn[i], zn[i:j], p1) : _prefix_solve!(prefix, solve_ode, recombination_ode!, ys[i], zn, i, j, p1)
         for m in (i + 1):j
             ys[m] = collect(sol[:, m - i + 1]); obs[m] = ode_observables(ys[m], fHe, true)
         end

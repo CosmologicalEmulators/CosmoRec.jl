@@ -87,6 +87,16 @@ function HIPDEState{T}(npts::Int) where {T}
                          [v(), v()], [v(), v()], [v(), v()], [v(), v()])
 end
 
+# reduced-production support (private): the span of `hp_phi[1]` the production code reads (`i >= index_2 + 1` up to `index_emission[2]`, and `index_2 + 1` itself), and NaN poison for everything else
+_hi_hp_span(s) = (i2 = s.index_2 + 1; i2:max(s.index_emission[2], i2))
+function _hi_poison_hp!(st::HIPDEState{T}, hp::UnitRange{Int}) where {T}
+    nan = convert(T, NaN)
+    fill!(st.hp_phi[2], nan)
+    h = st.hp_phi[1]
+    for i in eachindex(h); i in hp || (h[i] = nan); end
+    return st
+end
+
 # Dp_Dnem_function (define_PDE.cpp:617-715) for the production processes (Raman up to 2s, two-photon up to n = 3)
 function _pde_Dp_Dn(m::HIPDEModel, n::Int, z, Tg, pd_np, nem, N1s)
     a = m.atom; h_kb = m.k.h_kb
@@ -128,6 +138,13 @@ and Ly-3 resonance scattering and emission/absorption with Raman/two-photon corr
 2s-1s two-photon terms. Fills `st` (coefficients and the `PDE_funcs` side products) and returns it.
 """
 function hi_pde_rhs_coefficients!(st::HIPDEState, m::HIPDEModel, z)
+    return _hi_pde_rhs_coefficients!(st, m, z, nothing)
+end
+
+# Private worker. `hp === nothing`: the full public state (the original fused loop, untouched). `hp::UnitRange{Int}` (closed production stage only, opt-in `reduced_profiles`): `hp_phi[1]` is
+# computed only on `hp` and `hp_phi[2]` not at all (the entries the PDE step and the correction integrals never read); the other `hp_phi` entries are left as the stepper's NaN poison. Every other
+# field is computed by the same statements in the same order. Never hand a reduced state to a user observer.
+function _hi_pde_rhs_coefficients!(st::HIPDEState, m::HIPDEModel, z, hp::Union{Nothing,UnitRange{Int}})
     s = m.setup; a = m.atom; k = m.k; x = s.x; npts = length(x)
     nu21 = a.nu21
     Hz = cosmos_H(m.cosmos, z); NH = cosmos_NH(m.cosmos, z); Tg = cosmos_TCMB(m.cosmos, z)
@@ -158,9 +175,20 @@ function hi_pde_rhs_coefficients!(st::HIPDEState, m::HIPDEModel, z)
         psc = 1.0 - st.pd[j]
         st.aV[j] = voigt_a(L, Tm) / L.Gamma * a.lyn_A21[j] / psc
         aV = st.aV[j]; DnT = voigt_DnuT(L, Tm)
-        @inbounds for i in 1:npts
-            st.phi[j][i] = voigt_phi((nu21 * x[i] - L.nu21) / DnT, aV)
-            st.hp_phi[j][i] = voigt_phi((nu21 * ((1.0 - 1.0 / n / n) / 0.75 - x[i]) - L.nu21) / DnT, aV)
+        if hp === nothing
+            @inbounds for i in 1:npts
+                st.phi[j][i] = voigt_phi((nu21 * x[i] - L.nu21) / DnT, aV)
+                st.hp_phi[j][i] = voigt_phi((nu21 * ((1.0 - 1.0 / n / n) / 0.75 - x[i]) - L.nu21) / DnT, aV)
+            end
+        else
+            @inbounds for i in 1:npts
+                st.phi[j][i] = voigt_phi((nu21 * x[i] - L.nu21) / DnT, aV)
+            end
+            if j == 1                                    # the only consumer is `hp_phi[1]` on `hp` (the two-photon 3s/3d profile below)
+                @inbounds for i in hp
+                    st.hp_phi[j][i] = voigt_phi((nu21 * ((1.0 - 1.0 / n / n) / 0.75 - x[i]) - L.nu21) / DnT, aV)
+                end
+            end
         end
         # add_Ly_n_sc_em_full
         pd_np = st.pd[j]; psc_np = 1.0 - pd_np

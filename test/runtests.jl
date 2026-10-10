@@ -53,4 +53,8 @@ using Test
     include("chunk10d_background_link_ad.jl")
     include("chunk11_quadplan_ad.jl")
     include("chunk11c_quadplan_cached_fit.jl")
+    include("chunk11d_quadplan_scratch.jl")
+    include("chunk11e_reduced_profiles.jl")
+    include("chunk12a_prefix_toy.jl")
+    include("chunk12b_prefix_history.jl")
 end

@@ -1,8 +1,8 @@
 # Chunk 11b worker: ONE configuration per fresh Julia process (spawned by chunk11b_quadplan_stage_ad.jl; full-stage Mooncake preparations retain
 # ~10-13 GB each, so the default-path and the plan-path preparations must never share a process). Usage:
-#   julia --project=<active test env> chunk11b_stage_worker.jl <mode> <outfile> <seed>     mode = old | plan | ref | record
+#   julia --project=<active test env> chunk11b_stage_worker.jl <mode> <outfile> <seed>     mode = old | plan | planws | ref | record
 # Writes `key<TAB>value` text: provenance (versions, flags, input/weight checksums) and the results; Float64 values as exact bit patterns.
-#   old / plan : prepared Mooncake gradient of the objective dot(W, stage outputs) at both points (default path / opt-in quadrature plan).
+#   old / plan / planws : prepared Mooncake gradient of the objective dot(W, stage outputs) at both points (default path / opt-in quadrature plan / plan + caller-owned fit scratch `fitwork = true`).
 #   ref        : 256-bit reference of the same objective: central difference h = 1e-30 in BigFloat (precision 256) with the Patterson levels
 #                REPLAYED from the Float64 run at each point, on the default (generic) path, so the natural-spline stored factors stay Float64
 #                and the Patterson nodes/weights are the same Float64 constants (same-stored-factor, frozen-branch reference). No Mooncake.
@@ -28,8 +28,8 @@ const R11W = NODES5[:, 1:9]
 const PTS11W = ([1.0, 1.0], [0.999, 1.001])
 bits11(v) = join(string.(reinterpret(UInt64, collect(Float64, v)); base = 16, pad = 16), ",")
 sha11(v) = bytes2hex(sha256(reinterpret(UInt8, collect(Float64, v))))
-function out11w(p; plan = nothing, levels = nothing)
-    o, _ = hi_diffusion_stage(RM5, D11W, R11W; hscale = p[1], nbscale = p[2], quadplan = plan, levels = levels)
+function out11w(p; plan = nothing, levels = nothing, fitwork = nothing)
+    o, _ = hi_diffusion_stage(RM5, D11W, R11W; hscale = p[1], nbscale = p[2], quadplan = plan, levels = levels, fitwork = fitwork)
     mask = (o.z .< 2000.0) .& (o.z .> 500.0)
     vcat(o.DI1_2s[mask], o.DF_2g[1][mask], o.DF_2g[2][mask], o.DF_R[1][mask])
 end
@@ -42,7 +42,7 @@ end
 res = Pair{String,String}[]
 push!(res, "mode" => MODE11W, "seed" => string(SEED11W), "julia" => string(VERSION), "mooncake" => string(pkgversion(Mooncake)),
       "cosmorec_src" => pathof(CosmoRec), "check_bounds" => string(Base.JLOptions().check_bounds), "threads" => string(Threads.nthreads()))
-if MODE11W in ("old", "plan", "ref")
+if MODE11W in ("old", "plan", "planws", "ref")
     F0, W = weights11w(SEED11W)
     push!(res, "F0_sha256" => sha11(F0), "W_sha256" => sha11(W), "W_length" => string(length(W)), "points" => repr(PTS11W))
     if MODE11W == "ref"
@@ -61,8 +61,8 @@ if MODE11W in ("old", "plan", "ref")
                   "grad_$k" => bits11(Float64.(g)), "grad_$(k)_decimal" => repr(Float64.(g)), "grad_$(k)_big" => join(string.(g), ","))
         end
     else
-        plan = MODE11W == "plan" ? _hi_quad_plans(SETUP7) : nothing
-        obj(p, w) = dot(w, out11w(p; plan = plan))
+        plan = MODE11W in ("plan", "planws") ? _hi_quad_plans(SETUP7) : nothing; fw = MODE11W == "planws" ? true : nothing
+        obj(p, w) = dot(w, out11w(p; plan = plan, fitwork = fw))
         prep = prepare_gradient(obj, MC11W, [1.0, 1.0], Constant(W))
         for (k, p) in enumerate(PTS11W)
             g = gradient(obj, prep, MC11W, p, Constant(W))

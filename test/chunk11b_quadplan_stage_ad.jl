@@ -39,9 +39,11 @@ frombits11b(s) = [reinterpret(Float64, parse(UInt64, x; base = 16)) for x in spl
         @test ok_old
         ok_new, new = run_worker11b("plan", dir, seed)
         @test ok_new
+        ok_ws, wsd = run_worker11b("planws", dir, seed)     # plan + caller-owned fit scratch (`fitwork = true`), fresh process as well
+        @test ok_ws
         ok_ref, ref = run_worker11b("ref", dir, seed)
         @test ok_ref
-        (ok_old && ok_new && ok_ref) || continue
+        (ok_old && ok_new && ok_ws && ok_ref) || continue
         @test old["mode"] == "old" && new["mode"] == "plan" && ref["mode"] == "ref"
         for k in ("seed", "julia", "mooncake", "cosmorec_src", "check_bounds", "threads", "F0_sha256", "W_sha256", "W_length", "points")
             @test old[k] == new[k] == ref[k]                 # identical inputs, objective, weights and toolchain
@@ -54,6 +56,9 @@ frombits11b(s) = [reinterpret(Float64, parse(UInt64, x; base = 16)) for x in spl
             dnew = maximum(abs, gn .- go) / maximum(abs, go)
             println("Chunk11b GATE seed=", seed, " point=", k, " ref=", ref["grad_$(k)_decimal"], " old=", old["grad_$(k)_decimal"],
                     " new=", new["grad_$(k)_decimal"], " E_old=", Eold, " E_new=", Enew, " old_vs_new(diagnostic)=", dnew)
+            gw = frombits11b(wsd["grad_$k"]); Ews = maximum(abs, gw .- gr) / maximum(abs, gr)
+            println("Chunk11b GATE-WS seed=", seed, " point=", k, " ws=", wsd["grad_$(k)_decimal"], " E_ws=", Ews, " E_old=", Eold, " ws_vs_plan_bitwise=", gw == gn)
+            @test all(isfinite, gw) && Ews <= Eold           # workspace-ON path under the same reference-based criterion
             @test Enew <= Eold                               # primary reference-based criterion, per seed and point
             @test dnew <= 1.0e-5                             # diagnostic sanity bound (gross breakage only)
         end

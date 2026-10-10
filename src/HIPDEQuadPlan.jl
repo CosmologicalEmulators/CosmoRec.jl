@@ -237,6 +237,94 @@ function _hi_fit_cached(q::HIQuadPlan, F::AbstractVector{T}) where {T<:Real}
 end
 
 """
+    HIFitScratch{T}(n)
+
+Caller-owned (per stage / per chain / per task) scratch of the plan-path spline fit for ONE knot slice of `n` knots and ordinate type `T`: the five work/result arrays of
+`_hi_fit_cached` (`y`, `c`, `z`, `b`, `d`), allocated once. It is NOT part of the immutable plan and is never global: independent scratches may be used concurrently with one
+shared plan, ONE scratch must not be used by two tasks at once. `nfallback` counts calls served by the allocating oracle `_hi_fit_cached` (element-type mismatch, wrong scratch size,
+aliasing of the ordinates with a scratch array); nothing is ever coerced. Initial contents are irrelevant: every array is written completely on each call before it is read.
+"""
+struct HIFitScratch{T<:Real}
+    y::Vector{T}
+    c::Vector{T}
+    z::Vector{T}
+    b::Vector{T}
+    d::Vector{T}
+    nfallback::Base.RefValue{Int}
+end
+function HIFitScratch{T}(n::Integer) where {T<:Real}
+    n >= 3 || throw(ArgumentError("HIFitScratch: need n >= 3 knots"))
+    return HIFitScratch{T}(Vector{T}(undef, n), Vector{T}(undef, n), Vector{T}(undef, n - 2), Vector{T}(undef, n - 1), Vector{T}(undef, n - 1), Ref(0))
+end
+HIFitScratch(::Type{T}, n::Integer) where {T<:Real} = HIFitScratch{T}(n)
+
+"""Scratches of the three production blocks (`di1`, `two3` shared by 3s and 3d, which run one after the other, `raman`) for ordinates of type `T`; built from a plan set."""
+struct HIQuadWork{T<:Real}
+    di1::HIFitScratch{T}
+    two3::HIFitScratch{T}
+    raman::HIFitScratch{T}
+    nmismatch::Base.RefValue{Int}              # blocks served without scratch because the ordinate type differs from `T`
+end
+HIQuadWork(q::HIQuadPlans, ::Type{T}) where {T<:Real} =
+    HIQuadWork{T}(HIFitScratch{T}(length(q.di1.knots)), HIFitScratch{T}(length(q.two3.knots)), HIFitScratch{T}(length(q.raman.knots)), Ref(0))
+
+# stage plumbing: `fitwork = nothing` (default: allocating fit, unchanged) | `true` (a stage-owned `HIQuadWork` built here for ordinate type `T`) | a caller-owned `HIQuadWork` (used as is, never copied).
+# Anything else (including `false`) is an ArgumentError, as is any `fitwork` without the opt-in `quadplan`.
+_hi_stage_work(::Nothing, quadplan, ::Type) = nothing
+function _hi_stage_work(fitwork, quadplan, ::Type{T}) where {T}
+    quadplan === nothing && throw(ArgumentError("fitwork requires the opt-in quadplan path"))
+    fitwork === true && return HIQuadWork(quadplan, T)
+    fitwork isa HIQuadWork && return fitwork
+    throw(ArgumentError("fitwork must be nothing, true or a CosmoRec HIQuadWork"))
+end
+_hi_scratch_for(::Nothing, ::Symbol, ::AbstractVector) = nothing
+function _hi_scratch_for(w::HIQuadWork{T}, blk::Symbol, F::AbstractVector) where {T}
+    eltype(F) === T || (w.nmismatch[] += 1; return nothing)
+    return getfield(w, blk)
+end
+
+"""
+    _hi_fit_scratched(w, q, F) -> NaturalCubicSpline{T}
+
+Same spline as `_hi_fit_cached(q, F)` (same validation and error messages, same operation order, the `gamma` conversion to `T` before the forward substitution, natural zero ends),
+fitted into the scratch `w`. The result is an EPHEMERAL BORROWED view of `w`'s arrays (and of the plan's knots): valid only until the next fit into `w`; `_hi_spline_parts` consumes it within
+the call. Anything the scratch cannot serve identically (ordinates of another element type, scratch of another size, ordinates aliasing a scratch array) is served by the allocating `_hi_fit_cached`
+and counted in `w.nfallback`; nothing is coerced. AD: under Mooncake `_hi_spline_parts(q, F, forced, w)` is overlaid (see ext/CosmoRecMooncakeExt.jl) so that every later read of the scratch is differentiated.
+"""
+function _hi_fit_scratched(w::HIFitScratch{T}, q::HIQuadPlan, F::AbstractVector{T}) where {T<:Real}
+    xs = q.knots; n = length(xs); N = n - 2
+    dx = q.dx; g = q.g; off = q.off; alpha = q.alpha; tt = q.t
+    (n >= 3 && length(F) == n && length(dx) == n - 1 && length(g) == n - 1 && length(off) == N && length(alpha) == N && length(tt) == N) ||
+        throw(DimensionMismatch("_hi_fit_cached: need length(F) == length(plan knots) >= 3 and stored factors of matching length"))
+    @inbounds for i in 1:(n - 1)
+        h = xs[i + 1] - xs[i]
+        h > 0.0 || throw(ArgumentError("_hi_fit_cached: plan knots must be strictly increasing (natural_cubic_spline: x must be strictly increasing)"))
+        h == dx[i] || throw(ArgumentError("_hi_fit_cached: stored fit factors are stale (dx[$i] differs from the knot spacing); rebuild the plan"))
+    end
+    y = w.y; c = w.c; z = w.z; b = w.b; d = w.d
+    if length(y) != n || length(c) != n || length(z) != N || length(b) != n - 1 || length(d) != n - 1 ||
+       Base.mightalias(F, y) || Base.mightalias(F, c) || Base.mightalias(F, z) || Base.mightalias(F, b) || Base.mightalias(F, d)
+        w.nfallback[] += 1
+        return _hi_fit_cached(q, F)
+    end
+    copyto!(y, F); fill!(c, zero(T))
+    for i in 1:N
+        gam = convert(T, 3.0 * ((y[i + 2] - y[i + 1]) * g[i + 1] - (y[i + 1] - y[i]) * g[i]))
+        z[i] = i == 1 ? gam : gam - tt[i] * z[i - 1]
+    end
+    c[N + 1] = z[N] / alpha[N]
+    for i in (N - 1):-1:1
+        c[i + 1] = (z[i] - off[i] * c[i + 2]) / alpha[i]
+    end
+    for i in 1:(n - 1)
+        h = dx[i]
+        b[i] = (y[i + 1] - y[i]) / h - h * (c[i + 1] + 2.0 * c[i]) / 3.0
+        d[i] = (c[i + 1] - c[i]) / (3.0 * h)
+    end
+    return NaturalCubicSpline{T}(xs, y, b, c, d)
+end
+
+"""
     _hi_spline_parts(q, F, forced) -> (parts, levels, ok)
 
 Pure, generic: the `K` sub-integrals of the natural cubic spline of `F` on the plan's knots, computed by the unchanged primal arithmetic
@@ -255,6 +343,30 @@ function _hi_spline_parts(q::HIQuadPlan{K}, F::AbstractVector, forced::NTuple{K,
     length(F) == length(q.knots) || throw(DimensionMismatch("_hi_spline_parts: length(F) != number of plan knots"))
     _hi_check_levels(forced, "_hi_spline_parts forced levels")
     s = _hi_fit_cached(q, F)                      # bitwise natural_cubic_spline(q.knots, F), with the plan's stored geometry
+    return _hi_parts_from_spline(q, s, forced)
+end
+
+_hi_fit_scratched(w::HIFitScratch, q::HIQuadPlan, F::AbstractVector) = (w.nfallback[] += 1; _hi_fit_cached(q, F))      # other ordinate type / SubArray: counted allocating oracle
+
+"""
+    _hi_spline_parts(q, F, forced, w::HIFitScratch{T}) -> (parts, levels, ok)
+
+Same value, levels and flags as `_hi_spline_parts(q, F, forced)` (it shares `_hi_parts_from_spline`), with the spline fitted into the caller-owned scratch `w` (`_hi_fit_scratched`). `F` must be a
+`Vector{T}`; any other combination (SubArray ordinates, element type different from the scratch's) takes the ordinary allocating method and is counted in `w.nfallback`. Reverse mode: the optional
+Mooncake extension overlays this method (traced fit + the 3-argument primitive); there is deliberately no ChainRulesCore rule for it.
+"""
+function _hi_spline_parts(q::HIQuadPlan{K}, F::Vector{T}, forced::NTuple{K,Int}, w::HIFitScratch{T}) where {K,T<:Real}
+    length(F) == length(q.knots) || throw(DimensionMismatch("_hi_spline_parts: length(F) != number of plan knots"))
+    _hi_check_levels(forced, "_hi_spline_parts forced levels")
+    return _hi_parts_from_spline(q, _hi_fit_scratched(w, q, F), forced)
+end
+function _hi_spline_parts(q::HIQuadPlan{K}, F::AbstractVector, forced::NTuple{K,Int}, w::HIFitScratch) where {K}
+    w.nfallback[] += 1
+    return _hi_spline_parts(q, F, forced)
+end
+
+# the quadrature of the fitted spline (unchanged primal arithmetic; moved out of `_hi_spline_parts` so the scratch and allocating fits share it)
+function _hi_parts_from_spline(q::HIQuadPlan{K}, s::NaturalCubicSpline, forced::NTuple{K,Int}) where {K}
     T = eltype(s.y)
     f = t -> spline_eval_native(s, t)
     epsabs = q.epsabs0
@@ -320,15 +432,17 @@ function _hi_record_levels!(rec::PattersonLevels, q::HIQuadPlan{K}, levels::NTup
 end
 
 # plan path of the single-interval DI1 integral (`_hi_calc_DF`): (value, converged)
-function _hi_plan_single(q::HIQuadPlan{1}, F::AbstractVector, rec)
-    parts, levs, oks = _hi_spline_parts(q, F, _hi_forced_levels!(rec, q))
+_hi_parts(q, F, forced, ::Nothing) = _hi_spline_parts(q, F, forced)
+_hi_parts(q, F, forced, w::HIFitScratch) = _hi_spline_parts(q, F, forced, w)
+function _hi_plan_single(q::HIQuadPlan{1}, F::AbstractVector, rec, w = nothing)
+    parts, levs, oks = _hi_parts(q, F, _hi_forced_levels!(rec, q), w)
     _hi_record_levels!(rec, q, levs)
     return parts[1], oks[1]
 end
 
 # plan path of `_hi_integral_over_resonances` (same accumulation order; parts/ok from `_hi_spline_parts`)
-function _hi_plan_resonances(q::HIQuadPlan{K}, F::AbstractVector, rec) where {K}
-    parts, levs, oks = _hi_spline_parts(q, F, _hi_forced_levels!(rec, q))
+function _hi_plan_resonances(q::HIQuadPlan{K}, F::AbstractVector, rec, w = nothing) where {K}
+    parts, levs, oks = _hi_parts(q, F, _hi_forced_levels!(rec, q), w)
     _hi_record_levels!(rec, q, levs)
     r = zero(eltype(F)); sabs = 0.0; nunc = 0
     for i in 1:K
