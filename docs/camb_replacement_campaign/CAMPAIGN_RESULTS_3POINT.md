@@ -28,3 +28,15 @@ max|dTE|/sqrt(TT*EE) 4.4e-7, lensed BB max frac 7.7e-6, phiphi max frac 1.4e-8.
   per-call seconds, inputs as received), `run_header.txt` (hashes, versions), `campaign.log`, per-step `.exit` files (all 0).
 - Focused feasibility gate `../bridge_test_run4.log`: 16/16 (roundtrip, counters, native-unlinked, unregistered-abort,
   repeated A-B-A calls, bitwise determinism).
+
+## Re-certification on the reverted tree (2026-10-11, commit 38bdf8a)
+
+The production libm ccalls were reverted to Julia `exp`/`log`/`^` (they broke every reverse-mode path through the
+recombination ODE: Mooncake has no rrule for `foreigncall`; bitwise copies now live only in the RecfastGear diagnostic).
+The 3-point certification was re-run to re-prove the gate on the changed numerics:
+
+- fid / cornerA / cornerB: lensed TT&EE all ell 2..9500 **PASS**; worst lensed EE 7.9e-6 at ell 9500 (cornerB),
+  lensed TT 1.2e-6, unlensed TT/EE 1.2-1.4e-6 — same magnitudes as the original run, budget 5e-4.
+- Bridge feasibility gate re-run: 16/16. Native-parity Gear fixtures through the `_nat_*` copies: 6000/6000 bitwise
+  on all columns. Post-revert 10-file AD battery green except the six documented known-failure diagnostics
+  (values refreshed in `full_suite/TALLY.md`).
