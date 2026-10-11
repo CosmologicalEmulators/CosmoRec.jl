@@ -1,12 +1,14 @@
 # Native parity milestone 1: faithful port of the ORIGINAL Recfast++ Gear ODE solver (src/RecfastGear.jl, ODE_solver.Recfast.cpp) driving the preliminary
 # history, with the standalone closure constants (StandaloneInit.jl) and the native-order pivot redshifts (RecfastPP.jl recfast_grid, Recfast++.cpp:151).
 # References: verbatim native text fixtures native_recfast_history.txt + native_hubble_input.txt (fid, 6000 nodes) and native_standalone_h50_* (h50).
-# Milestone 2: native-order RHS (evaluate_recfast_system_native, evalode.Recfast.cpp:99-220) + C-library exp/log/pow in the Float64 Hubble/Saha/NH/Te_QS paths.
+# Milestone 2: native-order RHS (evaluate_recfast_system_native, evalode.Recfast.cpp:99-220) + C-library exp/log/pow in the diagnostic native-order
+# copies (RecfastGear.jl _nat_*: Hubble/Saha/NH/Te_QS, incl. _nat_hubble_table/_nat_cosmos_H); production uses Julia exp/log/pow (AD-traceable).
 # Milestone 3: Hubble-table natural spline with the GSL 2.8 solve_tridiag operation order (CosmosAccessors.jl natural_cubic_spline); direct test vs native GSL
 # coefficients/evaluations (native_gsl_hubble_spline_{fid,h50}.txt). Exact (bitwise) facts only.
 # No solver package needed (pure Float64 port).
 using Test
 using CosmoRec
+import CosmoRec: _nat_hubble_table, _nat_cosmos_H, _nat_recfast_grid, _nat_recfast_history
 using Printf
 
 const FIXP1 = joinpath(@__DIR__, "fixtures")
@@ -16,9 +18,9 @@ function gearP1(H0, ombh2, omch2, Y, nnu, hfile)
     c = cosmos_constants(; Omega_c = d.Omega_c, Omega_b = d.Omega_b, Omega_k = 0.0, N_eff = nnu, h100 = H0 / 100.0, T_CMB = 2.7255, Y_p = Y)
     θ = recfast_theta(; Omega_b = d.Omega_b, h100 = H0 / 100.0, T_CMB = 2.7255, Y_p = Y)
     HB = reduce(hcat, rowsP1(hfile))'
-    hacc = CosmosAccessors(c, nothing, hubble_table(HB[:, 1], HB[:, 2])); Hf = z -> cosmos_H(hacc, z)
-    g = recfast_grid(θ, NATIVE_RECFAST_CONSTANTS, Hf)
-    return g, recfast_history(θ, NATIVE_RECFAST_CONSTANTS, Hf, g, recfast_gear_solve)
+    hacc = CosmosAccessors(c, nothing, _nat_hubble_table(HB[:, 1], HB[:, 2])); Hf = z -> _nat_cosmos_H(hacc, z)
+    g = _nat_recfast_grid(θ, NATIVE_RECFAST_CONSTANTS, Hf)
+    return g, _nat_recfast_history(θ, NATIVE_RECFAST_CONSTANTS, Hf, g, recfast_gear_solve)
 end
 relP1(a, b) = maximum(i -> a[i] == b[i] ? 0.0 : abs(a[i] - b[i]) / abs(b[i]), eachindex(a))
 
@@ -49,14 +51,14 @@ relP1(a, b) = maximum(i -> a[i] == b[i] ? 0.0 : abs(a[i] - b[i]) / abs(b[i]), ea
     @testset "Hubble table spline vs native GSL cspline (coefficients and evaluation, bitwise)" begin
         for (nm, hfile) in (("fid", "native_hubble_input.txt"), ("h50", "native_standalone_h50_hubble.txt"))
             HB = reduce(hcat, rowsP1(joinpath(FIXP1, hfile)))'
-            ht = hubble_table(HB[:, 1], HB[:, 2]); s = ht.spline
+            ht = _nat_hubble_table(HB[:, 1], HB[:, 2]); s = ht.spline
             L = [split(l, '\t') for l in eachline(joinpath(FIXP1, "native_gsl_hubble_spline_$nm.txt")) if !startswith(l, "#")]
             K = [parse.(Float64, l[3:5]) for l in L if l[1] == "KNOT"]; E = [parse.(Float64, l[2:3]) for l in L if l[1] == "EVAL"]
             @test length(K) == 10000 && length(E) == 5905
             @test s.x == getindex.(K, 1) && s.y == getindex.(K, 2)        # ln z, ln H knots (node-0 quirk ln H = 0 included)
             @test s.c == getindex.(K, 3)                                  # second-derivative coefficients (GSL solve_tridiag order)
             hacc = CosmosAccessors(cosmos_constants(; Omega_c = 0.26, Omega_b = 0.05, Omega_k = 0.0, N_eff = 3.046, h100 = 0.7, T_CMB = 2.7255, Y_p = 0.245), nothing, ht)
-            @test all(e -> cosmos_H(hacc, e[1]) == e[2], E)               # table branch only (zmin < z < zmax); closure constants unused there
+            @test all(e -> _nat_cosmos_H(hacc, e[1]) == e[2], E)          # table branch only (zmin < z < zmax); closure constants unused there
         end
     end
 end

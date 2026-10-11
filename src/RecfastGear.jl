@@ -357,8 +357,165 @@ end
 const _RF_LIBM = Sys.islinux() ? "libm.so.6" : ""
 _cexp(x::Float64) = isempty(_RF_LIBM) ? exp(x) : ccall((:exp, _RF_LIBM), Float64, (Float64,), x)
 _clog(x::Float64) = isempty(_RF_LIBM) ? log(x) : ccall((:log, _RF_LIBM), Float64, (Float64,), x)
-# C-library pow for Float64 (used by the generic Recfast++ helpers in RecfastPP.jl); generic (AD) types keep Julia ^.
-_npow(x::Float64, y::Float64) = _cpow(x, y); _npow(x, y) = x^y
+# Native-order Hubble-table construction/evaluation (diagnostic only, Float64). Production `hubble_table`/`cosmos_H`
+# (CosmosAccessors.jl) use Julia's exp/log so that every AD backend (Mooncake, Enzyme, Reactant) can trace them; the
+# native bitwise facts (glibc log/exp, Cosmos.cpp:104-193) are preserved HERE for the parity fixtures.
+function _nat_hubble_table(z::AbstractVector{<:Real}, Hz::AbstractVector{<:Real})
+    nz = length(z)
+    length(Hz) == nz || throw(DimensionMismatch("_nat_hubble_table: z and Hz differ in length"))
+    lz = zeros(nz); lHz = zeros(nz)
+    if z[1] < z[2]
+        lz[1] = z[1] == 0 ? _clog(1.0e-10) : _clog(Float64(z[1]))
+        zmin = _cexp(lz[1]); zmax = z[nz]
+        for k in 2:nz
+            lz[k] = _clog(Float64(z[k])); lHz[k] = _clog(Float64(Hz[k]))
+        end
+    else
+        lz[1] = z[nz] == 0 ? _clog(1.0e-10) : _clog(Float64(z[nz]))
+        zmin = _cexp(lz[1]); zmax = z[1]
+        for k in 2:nz
+            lz[k] = _clog(Float64(z[nz + 1 - k])); lHz[k] = _clog(Float64(Hz[nz + 1 - k]))
+        end
+    end
+    return HubbleTable(natural_cubic_spline(lz, lHz), zmin, zmax)
+end
+function _nat_cosmos_H(a::CosmosAccessors, z::Float64)
+    h = a.hubble
+    if h !== nothing && z > h.zmin && z < h.zmax
+        return _cexp(spline_eval_native(h.spline, _clog(z)))
+    end
+    c = a.c
+    zp1 = 1.0 + z
+    return c.H0 * sqrt(c.O_L + zp1 * zp1 * (c.O_k + zp1 * (c.O_m + c.O_rel * zp1)))
+end
+
+# Native-order mirrors of the production Recfast++ history helpers (RecfastPP.jl), for the bitwise parity fixtures only:
+# production uses Julia exp/log/pow (AD-traceable); these use the C library exactly as the native object code does.
+_nat_TCMB(θ, z) = θ[6] * (1.0 + z)
+function _nat_Te_QS(θ, z, Xe, Hz, c::RecfastConstants)
+    TR = _nat_TCMB(θ, z)
+    Comp = 8.0 * c.sigmaT * c.aRad * _cpow(TR, 4.0) / (3.0 * Hz * c.mElect * c.cLight)
+    kappa = Comp * Xe / (1.0 + Xe + _nat_fHe(c, θ[3]))
+    return TR * (1.0 - 1.0 / (1.0 + kappa))
+end
+function _nat_SahaBoltz_HeIII(nH, fHe, T, c::RecfastConstants)
+    c1 = 2.0 * c.pi * c.mElect * c.kBoltz * T / (c.hPlanck * c.hPlanck)
+    g = _cpow(c1, 1.5) * _cexp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 + fHe - g
+    return 0.5 * (d + sqrt(d * d + 4.0 * g * (1.0 + 2.0 * fHe)))
+end
+function _nat_SahaBoltz_HeII(nH, fHe, T, c::RecfastConstants)
+    c1 = 2.0 * c.pi * c.mElect * c.kBoltz * T / (c.hPlanck * c.hPlanck)
+    g = 4.0 * _cpow(c1, 1.5) * _cexp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 - g
+    return 0.5 * (d + sqrt(d * d + 4.0 * g * (1.0 + fHe)))
+end
+
+# Native-order mirror of `recfast_grid` (RecfastPP.jl, Recfast++.cpp:119-335): identical logic and pivots, C-library exp/log/pow.
+function _nat_recfast_grid(θ_in, c::RecfastConstants, Hfun; npts::Int = 6000, zstart::Float64 = 2.5e4, zend_rec::Float64 = 0.0)
+    θ = Float64.(θ_in)
+    zarr = zeros(npts)
+    fHe = _nat_fHe(c, θ[3])
+    Saha_eps_I = 5.0e-4; Saha_eps_II = 1.0e-5
+    n_low_res = 100; n_high_res = (npts - 2 * n_low_res) ÷ 3
+    zc_HeIII = 9000.0 * (2.726 / θ[6]); zc_HeIIIS = 4800.0 * (2.726 / θ[6]); zc_HeII = 3600.0 * (2.726 / θ[6])
+    ends = [0, 0, 0]
+    j = 0
+    z = zstart; zend = max(zc_HeIII, zend_rec); Dz = (z - zend) / n_low_res
+    if z > zc_HeIII && z > zend
+        while z >= zend + Dz
+            zarr[j + 1] = z
+            Xe = 1.0 + 2.0 * fHe
+            TM = _nat_Te_QS(θ, z, Xe, Hfun(z), c)
+            Xe_Saha = _nat_SahaBoltz_HeIII(_nat_NH(c, θ[3], θ[4], θ[5], z), fHe, TM, c)
+            if abs(Xe / Xe_Saha - 1.0) >= Saha_eps_I
+                zend = z; break
+            end
+            z -= Dz; j += 1
+        end
+    end
+    ends[1] = j + 1
+    z = zend; zend = max(zc_HeIIIS, zend_rec); Dz = (z - zend) / n_high_res
+    if z > zc_HeIIIS && z > zend
+        while z >= zend + Dz
+            zarr[j + 1] = z
+            Xe = _nat_SahaBoltz_HeIII(_nat_NH(c, θ[3], θ[4], θ[5], z), fHe, _nat_TCMB(θ, z), c)
+            TM = _nat_Te_QS(θ, z, Xe, Hfun(z), c)
+            if abs(Xe / (1.0 + fHe) - 1.0) <= Saha_eps_II
+                zend = z; break
+            end
+            z -= Dz; j += 1
+        end
+    end
+    ends[2] = j + 1
+    z = zend; zend = max(zc_HeII, zend_rec); Dz = (z - zend) / n_low_res
+    if z > zc_HeII && z > zend
+        while z >= zend + Dz
+            zarr[j + 1] = z
+            Xe = 1.0 + fHe
+            TM = _nat_Te_QS(θ, z, Xe, Hfun(z), c)
+            Xe_Saha = _nat_SahaBoltz_HeII(_nat_NH(c, θ[3], θ[4], θ[5], z), fHe, TM, c)
+            if abs(Xe / Xe_Saha - 1.0) >= Saha_eps_I
+                zend = z; break
+            end
+            z -= Dz; j += 1
+        end
+    end
+    z = zend
+    zarr[j + 1] = z
+    ends[3] = j + 1
+    jode = j
+    if z > zend_rec
+        Dzl = (z - zend_rec) / (npts - j - 1)
+        i = j + 1
+        while i < npts && zarr[i] > 800.0
+            zarr[i + 1] = zarr[i] - Dzl; i += 1
+        end
+        zfac = _cexp(_clog(zarr[i] / max(zend_rec, 1.0e-2)) / (npts - i))
+        while i < npts && zarr[i] > zend_rec
+            zarr[i + 1] = zarr[i] / zfac; i += 1
+        end
+        zarr[npts] = max(0.0, zend_rec)
+    end
+    return RecfastGrid(zarr, (ends[1], ends[2], ends[3]), jode + 1)
+end
+
+# Native-order mirror of `recfast_history` (RecfastPP.jl): identical assembly, C-library Saha/Te_QS helpers. The ODE part is the
+# caller's `solve_ode` (the Gear port passes `recfast_gear_solve`, whose native RHS is already C-library order).
+function _nat_recfast_history(θ, c::RecfastConstants, Hfun, grid::RecfastGrid, solve_ode)
+    zarr = grid.z; n = length(zarr); j = grid.jode
+    T = promote_type(eltype(θ), Float64)
+    Xe_H = ones(T, n); Xe_He = fill(zero(T), n); Xe = zeros(T, n); dXe = zeros(T, n); dXH = zeros(T, n); TM = zeros(T, n)
+    fHe = _nat_fHe(c, θ[3])
+    e1, e2, _ = grid.seg_end
+    for i in 1:j
+        Xe_He[i] = fHe
+        if i <= e1 - 1
+            Xe[i] = 1.0 + 2.0 * fHe
+        elseif i <= e2 - 1
+            Xe[i] = _nat_SahaBoltz_HeIII(_nat_NH(c, θ[3], θ[4], θ[5], zarr[i]), fHe, _nat_TCMB(θ, zarr[i]), c)
+        else
+            Xe[i] = 1.0 + fHe
+        end
+        TM[i] = _nat_Te_QS(θ, zarr[i], Xe[i], Hfun(zarr[i]), c)
+    end
+    Xe_He[j] = fHe; Xe[j] = 1.0 + fHe; TM[j] = _nat_Te_QS(θ, zarr[j], Xe[j], Hfun(zarr[j]), c)
+    if n > j
+        u0 = [Xe_He[j], Xe_H[j], TM[j]]
+        res = solve_ode(recfast_rhs3!, u0, zarr[j], zarr[j:n], (θ, c, Hfun))
+        sol, dsol = res isa Tuple ? res : (res, nothing)
+        for k in 2:(n - j + 1)
+            i = j + k - 1
+            Xe_He[i] = sol[1, k]; Xe_H[i] = sol[2, k]; TM[i] = sol[3, k]
+            Xe[i] = Xe_H[i] + Xe_He[i]
+            if dsol === nothing
+                f = recfast_rhs(θ, zarr[i], (Xe_He[i], Xe_H[i], TM[i], 0.0), Hfun(zarr[i]), c)
+                dXe[i] = f[1] + f[2]; dXH[i] = f[2]
+            else
+                dXe[i] = dsol[1, k] + dsol[2, k]; dXH[i] = dsol[2, k]
+            end
+        end
+    end
+    return (z = zarr, Xe_H = Xe_H, Xe_He = Xe_He, Xe = Xe, dXe = dXe, dXe_H = dXH, TM = TM)
+end
 
 _nat_Boltzmann(gj, gi, E, T, c::RecfastConstants) = max(1.0e-300, ((gj / gi) * _cexp(-E / (c.kBoltz * T))))
 function _nat_SahaBoltz(gi, gc, ge, E_ion, T, c::RecfastConstants)

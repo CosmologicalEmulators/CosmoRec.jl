@@ -159,10 +159,6 @@ function recfast_splines(c::CosmosConstants, z, Xe_H, Xe_He, Xe, dXe, dXe_H, TM)
                           sp(reverse([TM[i] / (c.T0 * (1.0 + z[i])) for i in 1:M])), sp(log.(max.(reverse(Xe_He), 1.0e-20))))
 end
 
-# C-library exp/log for Float64 (the native Hubble::init / Hubble::H use glibc log/exp, Cosmos.cpp:104-193); generic types (AD) keep Julia's exp/log.
-_nlog(x::Float64) = _clog(x); _nlog(x) = log(x)
-_nexp(x::Float64) = _cexp(x); _nexp(x) = exp(x)
-
 """Native `Hubble` object with a loaded table: natural cubic spline of `ln H` vs `ln z` (see `hubble_table`) valid for `zmin < z < zmax`."""
 struct HubbleTable
     spline::NaturalCubicSpline{Float64}
@@ -182,16 +178,16 @@ function hubble_table(z::AbstractVector{<:Real}, Hz::AbstractVector{<:Real})
     length(Hz) == nz || throw(DimensionMismatch("hubble_table: z and Hz differ in length"))
     lz = zeros(nz); lHz = zeros(nz)
     if z[1] < z[2]
-        lz[1] = z[1] == 0 ? _nlog(1.0e-10) : _nlog(Float64(z[1]))
-        zmin = _nexp(lz[1]); zmax = z[nz]
+        lz[1] = z[1] == 0 ? log(1.0e-10) : log(Float64(z[1]))
+        zmin = exp(lz[1]); zmax = z[nz]
         for k in 2:nz
-            lz[k] = _nlog(Float64(z[k])); lHz[k] = _nlog(Float64(Hz[k]))
+            lz[k] = log(Float64(z[k])); lHz[k] = log(Float64(Hz[k]))
         end
     else
-        lz[1] = z[nz] == 0 ? _nlog(1.0e-10) : _nlog(Float64(z[nz]))
-        zmin = _nexp(lz[1]); zmax = z[1]
+        lz[1] = z[nz] == 0 ? log(1.0e-10) : log(Float64(z[nz]))
+        zmin = exp(lz[1]); zmax = z[1]
         for k in 2:nz
-            lz[k] = _nlog(Float64(z[nz + 1 - k])); lHz[k] = _nlog(Float64(Hz[nz + 1 - k]))
+            lz[k] = log(Float64(z[nz + 1 - k])); lHz[k] = log(Float64(Hz[nz + 1 - k]))
         end
     end
     return HubbleTable(natural_cubic_spline(lz, lHz), zmin, zmax)
@@ -208,7 +204,7 @@ end
 function cosmos_H(a::CosmosAccessors, z)
     h = a.hubble
     if h !== nothing && _primal(z) > h.zmin && _primal(z) < h.zmax
-        return _nexp(spline_eval_native(h.spline, _nlog(z)))
+        return exp(spline_eval_native(h.spline, log(z)))
     end
     c = a.c
     zp1 = 1.0 + z
