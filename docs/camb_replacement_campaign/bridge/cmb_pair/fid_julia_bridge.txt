@@ -1,0 +1,4 @@
+julia_calls_this_point 1
+shim_calls_total 1
+julia_seconds 39.44
+inputs Omega_c=0.26447041034523616 Omega_b=0.049301692328524445 Omega_k=0.0 N_eff=3.0460000000000003 H0=67.36 T_CMB=2.7255 Y_He=0.2454 nz=10000

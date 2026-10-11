@@ -1,0 +1,56 @@
+{
+ "camb_file": "/home/marcobonici/Desktop/work/CosmologicalEmulators/cmbcheb_test/tools/CAMB-cosmorec/camb/__init__.py",
+ "camb_version": "2.0.4",
+ "camblib_sha256": "e70a6976068ed895b7bf48bb4abb7fb10328756c8e4b7096c54c219c655ee0bf",
+ "cosmorec_cfg": {
+  "accuracy": 0.0,
+  "diff_iteration_max": -1,
+  "fdm": 0.0,
+  "flag_hi_absorption": -1,
+  "n_s_2gamma": -1,
+  "n_s_raman": -1,
+  "n_shells": -1,
+  "n_shells_hei": -1,
+  "runmode": 0
+ },
+ "derived": {
+  "N_eff": 3.0460000000000003,
+  "YHe": 0.27044208302699874
+ },
+ "derived_params": {
+  "DAstar": 14.043273280450938,
+  "age": 11.969612097117711,
+  "kd": 0.12421949339732084,
+  "keq": 0.00731673175292504,
+  "rdrag": 161.74373699563725,
+  "rstar": 157.79622239498963,
+  "thetad": 0.1800909013485026,
+  "thetaeq": 1.142502568546723,
+  "thetarseq": 0.6244102017731853,
+  "thetastar": 1.1236427522538586,
+  "zdrag": 1052.0441529938512,
+  "zeq": 2389.2271884002034,
+  "zstar": 1090.4747757473995
+ },
+ "elapsed_s": 19.229342699050903,
+ "lmax_out": 9500,
+ "mode": "native",
+ "omp_num_threads": "1",
+ "params": {
+  "H0": 90.0,
+  "TCMB": 2.7255,
+  "YHe": 0.27044208302699874,
+  "ln10As": 2.5,
+  "mnu": 0.5,
+  "nnu": 3.046,
+  "ns": 0.85,
+  "num_massive_neutrinos": 1,
+  "ombh2": 0.02,
+  "omch2": 0.08,
+  "omk": 0.0,
+  "tau": 0.02,
+  "w": -0.6,
+  "wa": -0.5
+ },
+ "preset": "worker"
+}

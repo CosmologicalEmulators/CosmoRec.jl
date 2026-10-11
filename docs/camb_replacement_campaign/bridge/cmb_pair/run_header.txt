@@ -1,0 +1,7 @@
+campaign start 2026-10-11T11:47:44-04:00 host alcanter points: fid cornerA cornerB
+598ddf24950f3e3a544689bc161dd9068a6b89650f364536a4e2484ffb0ca996  /home/marcobonici/Desktop/work/CosmologicalEmulators/cmbcheb_test/local_analysis/cosmorec_differentiability_20260930/chunk36_camb_replacement/bridge/camb_bridge/camb/camblib.so
+e70a6976068ed895b7bf48bb4abb7fb10328756c8e4b7096c54c219c655ee0bf  /home/marcobonici/Desktop/work/CosmologicalEmulators/cmbcheb_test/tools/CAMB-cosmorec/camb/camblib.so
+ed9ec23fffc1d2e6aeb490465e280983865615a599b55b230c13d4c614666cb9  /home/marcobonici/Desktop/work/CosmologicalEmulators/cmbcheb_test/local_analysis/cosmorec_differentiability_20260930/chunk36_camb_replacement/bridge/shim/cosmorecjl_shim.c
+julia version 1.12.6
+Python 3.12.2
+campaign end 2026-10-11T11:50:12-04:00 rc=0
