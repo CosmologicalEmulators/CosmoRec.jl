@@ -53,7 +53,7 @@ const RECFAST_THETA_NAMES = ("F", "A2s1s", "Yp", "Omega_b", "h100", "T0")
 
 rf_fHe(c::RecfastConstants, Yp) = Yp / (4.0 * c.fac_mHemH * (1.0 - Yp))
 rf_H0(c::RecfastConstants, h100) = h100 * 100.0 * 1.0e+3 / c.Mpc
-rf_NH(c::RecfastConstants, θ, z) = 3.0 * rf_H0(c, θ[5])^2 * θ[4] / (8.0 * c.pi * c.G * c.mHatom * (1.0 / (1.0 - θ[3]))) * (1.0 + z)^3
+rf_NH(c::RecfastConstants, θ, z) = 3.0 * rf_H0(c, θ[5])^2 * θ[4] / (8.0 * c.pi * c.G * c.mHatom * (1.0 / (1.0 - θ[3]))) * _npow(1.0 + z, 3.0)   # native pow(1+z, 3) (cosmology.Recfast.cpp:110-114)
 rf_TCMB(θ, z) = θ[6] * (1.0 + z)
 
 rf_boltzmann(gj, gi, E, T, c::RecfastConstants) = max(1.0e-300, (gj / gi) * exp(-E / (c.kBoltz * T)))
@@ -129,7 +129,7 @@ end
 """Native `Te_QS`: quasi-stationary matter temperature `TR (1 - 1/(1+kappa))`, `kappa = Comp fC Xe/(1+Xe+fHe)`, `Comp = 8 sigmaT aRad TR^4/(3 H me c)`."""
 function rf_Te_QS(θ, z, Xe, Hz, c::RecfastConstants = NATIVE_RECFAST_CONSTANTS, fC = 1.0)
     TR = rf_TCMB(θ, z)
-    Comp = 8.0 * c.sigmaT * c.aRad * TR^4 / (3.0 * Hz * c.mElect * c.cLight)
+    Comp = 8.0 * c.sigmaT * c.aRad * _npow(TR, 4.0) / (3.0 * Hz * c.mElect * c.cLight)   # native pow(TR, 4) (Recfast++.cpp:76-80)
     kappa = Comp * fC * Xe / (1.0 + Xe + rf_fHe(c, θ[3]))
     return TR * (1.0 - 1.0 / (1.0 + kappa))
 end
@@ -137,13 +137,13 @@ end
 """Native Recfast++ `SahaBoltz_HeIII(nH, fHe, T)` (nH in m^-3)."""
 function rf_SahaBoltz_HeIII(nH, fHe, T, c::RecfastConstants = NATIVE_RECFAST_CONSTANTS)
     c1 = 2.0 * c.pi * c.mElect * c.kBoltz * T / (c.hPlanck * c.hPlanck)
-    g = c1^1.5 * exp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 + fHe - g
+    g = _npow(c1, 1.5) * _nexp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 + fHe - g   # native pow/exp (Recfast++.cpp:56-62)
     return 0.5 * (d + sqrt(d * d + 4.0 * g * (1.0 + 2.0 * fHe)))
 end
 """Native Recfast++ `SahaBoltz_HeII(nH, fHe, T)`. Uses `EionHeII` in the exponent exactly as the native code does (it is the native source; not altered)."""
 function rf_SahaBoltz_HeII(nH, fHe, T, c::RecfastConstants = NATIVE_RECFAST_CONSTANTS)
     c1 = 2.0 * c.pi * c.mElect * c.kBoltz * T / (c.hPlanck * c.hPlanck)
-    g = 4.0 * c1^1.5 * exp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 - g
+    g = 4.0 * _npow(c1, 1.5) * _nexp(-c.EionHeII / (c.kBoltz * T)) / nH; d = 1.0 - g   # native pow/exp (Recfast++.cpp:66-72)
     return 0.5 * (d + sqrt(d * d + 4.0 * g * (1.0 + fHe)))
 end
 
@@ -166,7 +166,7 @@ function recfast_grid(θ_in, c::RecfastConstants, Hfun; npts::Int = 6000, zstart
     fHe = rf_fHe(c, θ[3])
     Saha_eps_I = 5.0e-4; Saha_eps_II = 1.0e-5
     n_low_res = 100; n_high_res = (npts - 2 * n_low_res) ÷ 3
-    zc_HeIII = 9000.0 * 2.726 / θ[6]; zc_HeIIIS = 4800.0 * 2.726 / θ[6]; zc_HeII = 3600.0 * 2.726 / θ[6]
+    zc_HeIII = 9000.0 * (2.726 / θ[6]); zc_HeIIIS = 4800.0 * (2.726 / θ[6]); zc_HeII = 3600.0 * (2.726 / θ[6])   # native `zc *= 2.726/Cosmo.T0` (Recfast++.cpp:151)
     ends = [0, 0, 0]
     # 0-based j as in the native code; zarr[j + 1] in Julia
     j = 0

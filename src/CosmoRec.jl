@@ -9,6 +9,8 @@ module CosmoRec
 # repository for now (see the project's `local_analysis` tree:
 # VERIFIED_ANALYSIS.md, sciml_chunk0/REPORT.md, sciml_chunk0/CHUNK0_REVIEW.md).
 #
+# Native-parity chunk adds src/RecfastGear.jl: faithful port of the original Recfast++ Gear ODE solver (ODE_solver.Recfast.cpp).
+# Chunk 35 adds src/StandaloneInit.jl: native Cosmos closure, in-pipeline preliminary Recfast++ history, checked ABI-shaped entry cosmorec_calc_h.
 # Chunk 6a adds src/HIPDECoefficients.jl: population splines, get_rates_all, pd / Rp-Rm and the pd / Dnem coefficient splines of the HI diffusion PDE.
 # Chunk 5a adds src/RecombinationODE.jl: the 12-/7-state ODE right-hand side dy/dz (native fcn_effective(int*, ...)) and the explicit production-table loader.
 # Chunk 4d adds src/HeliumSwitch.jl: sampled-HeI state switch (discrete decision/reset/packing, frozen branch).
@@ -49,6 +51,8 @@ include("HIDiffusionFeedback.jl")
 include("PrefixReuse.jl")
 include("RecombinationDiffusion.jl")
 include("RHSWorkspace.jl")
+include("StandaloneInit.jl")
+include("RecfastGear.jl")
 
 export AtomicRateTable, ResolvedStates, RateConstants, NATIVE_CONSTANTS, RateResult, RateTableDomainError,
     get_rates, get_rates!, log_qnl_qe, stencil_start, read_native_rate_file, load_rate_table,
@@ -79,6 +83,9 @@ export AtomicRateTable, ResolvedStates, RateConstants, NATIVE_CONSTANTS, RateRes
     LagrangeO2, lagrange_o2, HIPDEStepper, hi_pde_step!, polint_jc, hi_pde_march,
     sobolev_p_ij, hi_tau_S, hi_pde_integrals, hi_pde_corrections, PattersonLevels, replay,
     HIDiffusionFeedback, hi_diffusion_feedback, hi_DI1_2s, hi_DF_2g, hi_DF_R, hi_diffusion_rhs!, with_diffusion,
-    pass_solution_rows, ScaledBackground, HIDiffusionInputs, hi_diffusion_stage, recombination_history_diffusion
+    pass_solution_rows, ScaledBackground, HIDiffusionInputs, hi_diffusion_stage, recombination_history_diffusion,
+    native_calc_Orel, cosmos_constants, recfast_theta, camb_density_parameters, preliminary_history, CAMB_COSMOREC_RUNPARS, check_runmode0_config,
+    check_camb_grid, Runmode0Tables, load_runmode0_tables, cosmorec_calc_h, cosmorec_history,
+    RFGearSolution, RFGearSolver, rf_gear_solve_history!, recfast_gear_solve, evaluate_recfast_system_native
 
 end # module CosmoRec

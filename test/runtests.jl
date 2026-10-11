@@ -57,4 +57,6 @@ using Test
     include("chunk11e_reduced_profiles.jl")
     include("chunk12a_prefix_toy.jl")
     include("chunk12b_prefix_history.jl")
+    include("chunk35_standalone_init.jl")
+    include("native_parity_recfast_gear.jl")
 end

@@ -35,16 +35,25 @@ function natural_cubic_spline(x::AbstractVector{<:Real}, y::AbstractVector{T}) w
         diag[i] = 2.0 * (h_ip1 + h_i)
         gam[i] = 3.0 * (dy_ip1 * g_ip1 - dy_i * g_i)
     end
-    alpha = Vector{Float64}(undef, N); z = Vector{T}(undef, N)
-    alpha[1] = diag[1]; z[1] = gam[1]
-    for i in 2:N
-        t = off[i - 1] / alpha[i - 1]
-        alpha[i] = diag[i] - t * off[i - 1]
-        z[i] = gam[i] - t * z[i - 1]
+    # GSL 2.8 solve_tridiag (linalg/tridiag.c:38-107, called by gsl_linalg_solve_symm_tridiag from cspline_init, interpolation/cspline.c:96-140), same
+    # operation order: gamma[i] = offdiag[i]/alpha[i]; alpha[i] = diag[i] - offdiag[i-1]*gamma[i-1]; z[i] = b[i] - gamma[i-1]*z[i-1]; cc[i] = z[i]/alpha[i];
+    # back substitution x[i] = cc[i] - gamma[i]*x[i+1] (native-capture evidence: native_parity/spline_compare_before.txt, up to 3 ulp otherwise).
+    alpha = Vector{Float64}(undef, N); gamma = Vector{Float64}(undef, N); z = Vector{T}(undef, N)
+    alpha[1] = diag[1]
+    N > 1 && (gamma[1] = off[1] / alpha[1])
+    for i in 2:(N - 1)
+        alpha[i] = diag[i] - off[i - 1] * gamma[i - 1]
+        gamma[i] = off[i] / alpha[i]
     end
-    c[N + 1] = z[N] / alpha[N]
+    N > 1 && (alpha[N] = diag[N] - off[N - 1] * gamma[N - 1])
+    z[1] = gam[1]
+    for i in 2:N
+        z[i] = gam[i] - gamma[i - 1] * z[i - 1]
+    end
+    cc = [z[i] / alpha[i] for i in 1:N]
+    c[N + 1] = cc[N]
     for i in (N - 1):-1:1
-        c[i + 1] = (z[i] - off[i] * c[i + 2]) / alpha[i]
+        c[i + 1] = cc[i] - gamma[i] * c[i + 2]
     end
     b = Vector{T}(undef, n - 1); d = Vector{T}(undef, n - 1)
     for i in 1:(n - 1)
@@ -150,6 +159,10 @@ function recfast_splines(c::CosmosConstants, z, Xe_H, Xe_He, Xe, dXe, dXe_H, TM)
                           sp(reverse([TM[i] / (c.T0 * (1.0 + z[i])) for i in 1:M])), sp(log.(max.(reverse(Xe_He), 1.0e-20))))
 end
 
+# C-library exp/log for Float64 (the native Hubble::init / Hubble::H use glibc log/exp, Cosmos.cpp:104-193); generic types (AD) keep Julia's exp/log.
+_nlog(x::Float64) = _clog(x); _nlog(x) = log(x)
+_nexp(x::Float64) = _cexp(x); _nexp(x) = exp(x)
+
 """Native `Hubble` object with a loaded table: natural cubic spline of `ln H` vs `ln z` (see `hubble_table`) valid for `zmin < z < zmax`."""
 struct HubbleTable
     spline::NaturalCubicSpline{Float64}
@@ -169,16 +182,16 @@ function hubble_table(z::AbstractVector{<:Real}, Hz::AbstractVector{<:Real})
     length(Hz) == nz || throw(DimensionMismatch("hubble_table: z and Hz differ in length"))
     lz = zeros(nz); lHz = zeros(nz)
     if z[1] < z[2]
-        lz[1] = z[1] == 0 ? log(1.0e-10) : log(z[1])
-        zmin = exp(lz[1]); zmax = z[nz]
+        lz[1] = z[1] == 0 ? _nlog(1.0e-10) : _nlog(Float64(z[1]))
+        zmin = _nexp(lz[1]); zmax = z[nz]
         for k in 2:nz
-            lz[k] = log(z[k]); lHz[k] = log(Hz[k])
+            lz[k] = _nlog(Float64(z[k])); lHz[k] = _nlog(Float64(Hz[k]))
         end
     else
-        lz[1] = z[nz] == 0 ? log(1.0e-10) : log(z[nz])
-        zmin = exp(lz[1]); zmax = z[1]
+        lz[1] = z[nz] == 0 ? _nlog(1.0e-10) : _nlog(Float64(z[nz]))
+        zmin = _nexp(lz[1]); zmax = z[1]
         for k in 2:nz
-            lz[k] = log(z[nz + 1 - k]); lHz[k] = log(Hz[nz + 1 - k])
+            lz[k] = _nlog(Float64(z[nz + 1 - k])); lHz[k] = _nlog(Float64(Hz[nz + 1 - k]))
         end
     end
     return HubbleTable(natural_cubic_spline(lz, lHz), zmin, zmax)
@@ -195,7 +208,7 @@ end
 function cosmos_H(a::CosmosAccessors, z)
     h = a.hubble
     if h !== nothing && _primal(z) > h.zmin && _primal(z) < h.zmax
-        return exp(spline_eval_native(h.spline, log(z)))
+        return _nexp(spline_eval_native(h.spline, _nlog(z)))
     end
     c = a.c
     zp1 = 1.0 + z
